@@ -87,11 +87,18 @@ impl<K: Hash, L: Lattice + Clone> Sketch<K, L> {
         // This has to be settled before we can offer backward
         // compatibility across versions of the crate.
         // (And we need to make the hasher configurable.)
-        let start = hash(key);
-        let step = hash(&start);
+        let key_hash = hash(key);
         let bucket_count = self.buckets.len() as u64;
-        (0..self.buckets_per_key as u64).map(move |probe| {
-            (start.wrapping_add(probe.wrapping_mul(step)) % bucket_count) as usize
+        let step = if bucket_count == 1 {
+            0
+        } else {
+            1 + mix(key_hash) % (bucket_count - 1)
+        };
+        let mut index = key_hash % bucket_count;
+        (0..self.buckets_per_key).map(move |_| {
+            let current = index;
+            index = (index + step) % bucket_count;
+            current as usize
         })
     }
 }
@@ -100,6 +107,13 @@ fn hash<T: Hash + ?Sized>(value: &T) -> u64 {
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
     hasher.finish()
+}
+
+// splitmix64's finaliser, so `step` is unrelated to `key_hash % bucket_count`.
+fn mix(mut value: u64) -> u64 {
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
 }
 
 #[cfg(test)]
@@ -127,6 +141,17 @@ mod tests {
             for right in [false, true] {
                 assert_eq!(left.join(&right), left || right);
                 assert_eq!(left.meet(&right), left && right);
+            }
+        }
+    }
+
+    #[test]
+    fn a_key_never_lands_entirely_in_one_bucket() {
+        for bucket_count in [2, 3, 7, 64] {
+            let sketch = Sketch::new(bucket_count, 3, 0u64);
+            for key in 0..1000u64 {
+                let indices: Vec<usize> = sketch.indices(&key).collect();
+                assert!(indices.iter().any(|&index| index != indices[0]));
             }
         }
     }
