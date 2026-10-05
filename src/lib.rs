@@ -93,26 +93,37 @@ impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
     }
 
     fn indices(&self, key: &K) -> impl Iterator<Item = usize> + use<K, L, S> {
-        // TODO: this currently uses double hashing (Kirsch & Mitzenmacher)
-        // instead of computing `buckets_per_key` independent hashes.
-        // Decide whether this matters or if we should document it.
-        //
-        // This has to be settled before we can offer backward
-        // compatibility across versions of the crate.
-        let key_hash = self.hash_builder.hash_one(key);
-        let bucket_count = self.buckets.len() as u64;
-        let step = if bucket_count == 1 {
-            0
-        } else {
-            1 + mix(key_hash) % (bucket_count - 1)
-        };
-        let mut index = key_hash % bucket_count;
-        (0..self.buckets_per_key).map(move |_| {
-            let current = index;
-            index = (index + step) % bucket_count;
-            current as usize
-        })
+        bucket_indices(
+            self.hash_builder.hash_one(key),
+            self.buckets.len(),
+            self.buckets_per_key,
+        )
     }
+}
+
+fn bucket_indices(
+    key_hash: u64,
+    bucket_count: usize,
+    buckets_per_key: usize,
+) -> impl Iterator<Item = usize> {
+    // TODO: this currently uses double hashing (Kirsch & Mitzenmacher)
+    // instead of computing `buckets_per_key` independent hashes.
+    // Decide whether this matters or if we should document it.
+    //
+    // This has to be settled before we can offer backward
+    // compatibility across versions of the crate.
+    let bucket_count = bucket_count as u64;
+    let step = if bucket_count == 1 {
+        0
+    } else {
+        1 + mix(key_hash) % (bucket_count - 1)
+    };
+    let mut index = key_hash % bucket_count;
+    (0..buckets_per_key).map(move |_| {
+        let current = index;
+        index = (index + step) % bucket_count;
+        current as usize
+    })
 }
 
 // splitmix64's finaliser, so `step` is unrelated to `key_hash % bucket_count`.
