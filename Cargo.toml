@@ -2,5 +2,11 @@
 name = "lattice-sketch"
 version = "0.0.0"
 edition = "2024"
+rust-version = "1.99"
+description = "Space-efficient sketches of lattice-valued functions, generalising the Bloom filter"
+repository = "https://github.com/jeffparsons/lattice-sketch"
+license = "MIT OR Apache-2.0"
+keywords = ["lattice", "sketch", "bloom-filter", "probabilistic"]
+categories = ["data-structures", "algorithms"]
 
 [dependencies]
