@@ -1,1 +1,6 @@
-local/
+/local
+/target
+
+# Agent stuff
+/.claude
+/CLAUDE.local.md
