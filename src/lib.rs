@@ -1,4 +1,4 @@
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash};
 use std::marker::PhantomData;
 
 /// A lattice.
@@ -47,19 +47,32 @@ impl Lattice for bool {
 /// [^boldi-vigna]: Paolo Boldi and Sebastiano Vigna, "Compact Approximation of Lattice
 ///     Functions with Applications to Large-Alphabet Text Search", 2003.
 ///     <https://arxiv.org/abs/cs/0306046>
-pub struct Sketch<K, L> {
+pub struct Sketch<K, L, S = BuildHasherDefault<DefaultHasher>> {
     buckets: Vec<L>,
     buckets_per_key: usize,
+    hash_builder: S,
     _key: PhantomData<fn(&K)>,
 }
 
 impl<K: Hash, L: Lattice + Clone> Sketch<K, L> {
     pub fn new(bucket_count: usize, buckets_per_key: usize, initial: L) -> Self {
+        Self::with_hasher(bucket_count, buckets_per_key, initial, Default::default())
+    }
+}
+
+impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
+    pub fn with_hasher(
+        bucket_count: usize,
+        buckets_per_key: usize,
+        initial: L,
+        hash_builder: S,
+    ) -> Self {
         assert!(bucket_count > 0, "bucket_count must be at least 1");
         assert!(buckets_per_key > 0, "buckets_per_key must be at least 1");
         Sketch {
             buckets: vec![initial; bucket_count],
             buckets_per_key,
+            hash_builder,
             _key: PhantomData,
         }
     }
@@ -79,15 +92,14 @@ impl<K: Hash, L: Lattice + Clone> Sketch<K, L> {
         values.fold(first, |bound, value| bound.meet(value))
     }
 
-    fn indices(&self, key: &K) -> impl Iterator<Item = usize> + use<K, L> {
+    fn indices(&self, key: &K) -> impl Iterator<Item = usize> + use<K, L, S> {
         // TODO: this currently uses double hashing (Kirsch & Mitzenmacher)
         // instead of computing `buckets_per_key` independent hashes.
         // Decide whether this matters or if we should document it.
         //
         // This has to be settled before we can offer backward
         // compatibility across versions of the crate.
-        // (And we need to make the hasher configurable.)
-        let key_hash = hash(key);
+        let key_hash = self.hash_builder.hash_one(key);
         let bucket_count = self.buckets.len() as u64;
         let step = if bucket_count == 1 {
             0
@@ -101,12 +113,6 @@ impl<K: Hash, L: Lattice + Clone> Sketch<K, L> {
             current as usize
         })
     }
-}
-
-fn hash<T: Hash + ?Sized>(value: &T) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
 }
 
 // splitmix64's finaliser, so `step` is unrelated to `key_hash % bucket_count`.
@@ -183,6 +189,13 @@ mod tests {
             over_reported > 0,
             "test is too sparse to exercise collisions"
         );
+    }
+
+    #[test]
+    fn a_custom_hasher_is_used_consistently() {
+        let mut sketch = Sketch::with_hasher(64, 3, 0u64, std::hash::RandomState::new());
+        sketch.insert(&"key", &7);
+        assert!(sketch.query(&"key") >= 7);
     }
 
     #[test]
