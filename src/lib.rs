@@ -10,6 +10,34 @@ pub trait Lattice {
     fn meet(&self, other: &Self) -> Self;
 }
 
+macro_rules! impl_lattice_for_integers {
+    ($($integer:ty),*) => {$(
+        impl Lattice for $integer {
+            fn join(&self, other: &Self) -> Self {
+                (*self).max(*other)
+            }
+
+            fn meet(&self, other: &Self) -> Self {
+                (*self).min(*other)
+            }
+        }
+    )*};
+}
+
+impl_lattice_for_integers!(
+    u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize
+);
+
+impl Lattice for bool {
+    fn join(&self, other: &Self) -> Self {
+        *self || *other
+    }
+
+    fn meet(&self, other: &Self) -> Self {
+        *self && *other
+    }
+}
+
 /// A lattice sketch.
 ///
 /// Approximates inserted values from above.
@@ -89,6 +117,31 @@ mod tests {
 
         fn meet(&self, other: &Self) -> Self {
             Max(self.0.min(other.0))
+        }
+    }
+
+    #[test]
+    fn integers_join_to_max_and_meet_to_min() {
+        macro_rules! check {
+            ($low:expr, $high:expr; $($integer:ty),*) => {$(
+                let (low, high): ($integer, $integer) = ($low, $high);
+                assert_eq!(low.join(&high), high);
+                assert_eq!(high.join(&low), high);
+                assert_eq!(low.meet(&high), low);
+                assert_eq!(high.meet(&low), low);
+            )*};
+        }
+        check!(3, 5; u8, u16, u32, u64, u128, usize);
+        check!(-3, 2; i8, i16, i32, i64, i128, isize);
+    }
+
+    #[test]
+    fn bool_joins_with_or_and_meets_with_and() {
+        for left in [false, true] {
+            for right in [false, true] {
+                assert_eq!(left.join(&right), left || right);
+                assert_eq!(left.meet(&right), left && right);
+            }
         }
     }
 
