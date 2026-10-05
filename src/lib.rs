@@ -106,20 +106,6 @@ fn hash<T: Hash + ?Sized>(value: &T) -> u64 {
 mod tests {
     use super::*;
 
-    /// `u64` under its usual order, which forms a lattice: join is `max`, meet is `min`.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-    struct Max(u64);
-
-    impl Lattice for Max {
-        fn join(&self, other: &Self) -> Self {
-            Max(self.0.max(other.0))
-        }
-
-        fn meet(&self, other: &Self) -> Self {
-            Max(self.0.min(other.0))
-        }
-    }
-
     #[test]
     fn integers_join_to_max_and_meet_to_min() {
         macro_rules! check {
@@ -148,13 +134,13 @@ mod tests {
     #[test]
     fn inserted_keys_are_never_under_reported() {
         // Far more keys than buckets, so collisions force over-reporting.
-        let mut sketch = Sketch::new(64, 3, Max(0));
+        let mut sketch = Sketch::new(64, 3, 0u64);
         let mut truth = std::collections::HashMap::new();
         for round in 0..3 {
             for key in 0..200u64 {
                 // Arbitrary scramble, so a key's largest value might arrive in any round.
                 // (Factors are the 1,000th prime and 10,000th prime.)
-                let value = Max((key * 7919 + round * 104_729) % 1000);
+                let value = (key * 7919 + round * 104_729) % 1000;
                 sketch.insert(&key, &value);
                 let best = truth.entry(key).or_insert(value);
                 *best = (*best).max(value);
@@ -176,13 +162,13 @@ mod tests {
 
     #[test]
     fn keys_never_inserted_report_at_least_the_initial_value() {
-        let mut sketch = Sketch::new(64, 3, Max(10));
-        assert_eq!(sketch.query(&"absent"), Max(10));
+        let mut sketch = Sketch::new(64, 3, 10u64);
+        assert_eq!(sketch.query(&"absent"), 10);
         for key in ["a", "b", "c"] {
-            sketch.insert(&key, &Max(50));
+            sketch.insert(&key, &50);
         }
         for key in ["absent", "missing", "nowhere"] {
-            assert!(sketch.query(&key) >= Max(10));
+            assert!(sketch.query(&key) >= 10);
         }
     }
 }
