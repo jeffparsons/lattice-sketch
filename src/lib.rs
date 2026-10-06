@@ -1,10 +1,10 @@
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash};
 use std::marker::PhantomData;
 
-#[cfg(target_has_atomic = "64")]
+#[cfg(target_has_atomic = "8")]
 mod atomic;
 
-#[cfg(target_has_atomic = "64")]
+#[cfg(target_has_atomic = "8")]
 pub use atomic::AtomicSketch;
 
 /// A lattice.
