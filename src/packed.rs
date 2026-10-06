@@ -42,6 +42,7 @@ macro_rules! impl_packed_lattice_for_narrow_integers {
         impl PackedLattice for $name {
             #[inline]
             fn byte_count(bucket_count: usize) -> usize {
+                // Padding, so the last bucket can still be read as a whole `$repr`.
                 bucket_count * $bytes + (size_of::<$repr>() - $bytes)
             }
 
