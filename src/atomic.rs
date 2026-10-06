@@ -191,23 +191,6 @@ mod tests {
     }
 
     #[test]
-    fn answers_match_plain_sketch() {
-        let mut plain = Sketch::new(64, 3, 0u64);
-        let mut exclusive = AtomicSketch::new(64, 3, 0u64);
-        let shared = AtomicSketch::new(64, 3, 0u64);
-        for key in 0..200u64 {
-            let value = (key * 7919) % 1000;
-            plain.insert(&key, &value);
-            exclusive.insert(&key, &value);
-            shared.insert_shared(&key, &value);
-        }
-        for key in 0..400u64 {
-            assert_eq!(exclusive.query(&key), plain.query(&key));
-            assert_eq!(shared.query(&key), plain.query(&key));
-        }
-    }
-
-    #[test]
     fn integer_answers_match_plain_sketch() {
         macro_rules! check {
             ($($integer:ty),*) => {$(
