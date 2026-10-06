@@ -139,7 +139,7 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_has_atomic = "64"))]
 mod tests {
     use super::*;
     use crate::Sketch;
