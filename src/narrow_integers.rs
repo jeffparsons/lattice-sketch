@@ -4,12 +4,14 @@ use std::fmt;
 pub struct U24(u32);
 
 impl From<u8> for U24 {
+    #[inline]
     fn from(value: u8) -> Self {
         U24(value.into())
     }
 }
 
 impl From<u16> for U24 {
+    #[inline]
     fn from(value: u16) -> Self {
         U24(value.into())
     }
@@ -18,6 +20,7 @@ impl From<u16> for U24 {
 impl TryFrom<u32> for U24 {
     type Error = OutOfRangeError;
 
+    #[inline]
     fn try_from(value: u32) -> Result<Self, OutOfRangeError> {
         if value < 1 << 24 {
             Ok(U24(value))
@@ -28,6 +31,7 @@ impl TryFrom<u32> for U24 {
 }
 
 impl From<U24> for u32 {
+    #[inline]
     fn from(value: U24) -> Self {
         value.0
     }

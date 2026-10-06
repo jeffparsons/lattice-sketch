@@ -23,10 +23,12 @@ pub trait Lattice {
 macro_rules! impl_lattice_for_integers {
     ($($integer:ty),*) => {$(
         impl Lattice for $integer {
+            #[inline]
             fn join(&self, other: &Self) -> Self {
                 (*self).max(*other)
             }
 
+            #[inline]
             fn meet(&self, other: &Self) -> Self {
                 (*self).min(*other)
             }
@@ -39,10 +41,12 @@ impl_lattice_for_integers!(
 );
 
 impl Lattice for bool {
+    #[inline]
     fn join(&self, other: &Self) -> Self {
         *self || *other
     }
 
+    #[inline]
     fn meet(&self, other: &Self) -> Self {
         *self && *other
     }
@@ -87,6 +91,7 @@ impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
         }
     }
 
+    #[inline]
     pub fn insert(&mut self, key: &K, value: &L) {
         for index in self.indices(key) {
             self.buckets[index] = self.buckets[index].join(value);
@@ -110,6 +115,7 @@ impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
         }
     }
 
+    #[inline]
     pub fn query(&self, key: &K) -> L {
         let mut values = self.indices(key).map(|index| &self.buckets[index]);
         let first = values
@@ -119,6 +125,7 @@ impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
         values.fold(first, |bound, value| bound.meet(value))
     }
 
+    #[inline]
     fn indices(&self, key: &K) -> impl Iterator<Item = usize> + use<K, L, S> {
         bucket_indices(
             self.hash_builder.hash_one(key),
@@ -144,6 +151,7 @@ fn assert_mergeable<S: PartialEq>(
     assert!(hash_builder == other_hash_builder, "hashers must be equal");
 }
 
+#[inline]
 fn bucket_indices(
     key_hash: u64,
     bucket_count: usize,
@@ -170,6 +178,7 @@ fn bucket_indices(
 }
 
 // splitmix64's finaliser, so `step` is unrelated to `key_hash % bucket_count`.
+#[inline]
 fn mix(mut value: u64) -> u64 {
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);

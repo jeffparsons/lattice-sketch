@@ -25,18 +25,22 @@ macro_rules! impl_atomic_lattice_for_integers {
         impl AtomicLattice for $integer {
             type Atomic = std::sync::atomic::$atomic;
 
+            #[inline]
             fn new_atomic(value: Self) -> Self::Atomic {
                 Self::Atomic::new(value)
             }
 
+            #[inline]
             fn get_mut(atomic: &mut Self::Atomic) -> &mut Self {
                 atomic.get_mut()
             }
 
+            #[inline]
             fn load(atomic: &Self::Atomic) -> Self {
                 atomic.load(Ordering::Relaxed)
             }
 
+            #[inline]
             fn fetch_join(atomic: &Self::Atomic, value: Self) {
                 atomic.fetch_max(value, Ordering::Relaxed);
             }
@@ -60,18 +64,22 @@ impl_atomic_lattice_for_integers!(
 impl AtomicLattice for bool {
     type Atomic = AtomicBool;
 
+    #[inline]
     fn new_atomic(value: Self) -> AtomicBool {
         AtomicBool::new(value)
     }
 
+    #[inline]
     fn get_mut(atomic: &mut AtomicBool) -> &mut Self {
         atomic.get_mut()
     }
 
+    #[inline]
     fn load(atomic: &AtomicBool) -> Self {
         atomic.load(Ordering::Relaxed)
     }
 
+    #[inline]
     fn fetch_join(atomic: &AtomicBool, value: Self) {
         atomic.fetch_or(value, Ordering::Relaxed);
     }
@@ -107,6 +115,7 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    #[inline]
     pub fn insert(&mut self, key: &K, value: &L) {
         for index in self.indices(key) {
             let bucket = L::get_mut(&mut self.buckets[index]);
@@ -114,6 +123,7 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    #[inline]
     pub fn insert_shared(&self, key: &K, value: &L) {
         for index in self.indices(key) {
             let bucket = &self.buckets[index];
@@ -149,6 +159,7 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    #[inline]
     pub fn query(&self, key: &K) -> L {
         let mut values = self.indices(key).map(|index| L::load(&self.buckets[index]));
         let first = values.next().expect("buckets_per_key is at least 1");
@@ -169,6 +180,7 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         );
     }
 
+    #[inline]
     fn indices(&self, key: &K) -> impl Iterator<Item = usize> + use<K, L, S> {
         bucket_indices(
             self.hash_builder.hash_one(key),

@@ -16,14 +16,17 @@ mod sealed {
 use sealed::PackedLattice;
 
 impl PackedLattice for bool {
+    #[inline]
     fn byte_count(bucket_count: usize) -> usize {
         bucket_count.div_ceil(8)
     }
 
+    #[inline]
     fn get(bytes: &[u8], index: usize) -> Self {
         bytes[index / 8] & (1 << (index % 8)) != 0
     }
 
+    #[inline]
     fn set(bytes: &mut [u8], index: usize, value: Self) {
         let bit = 1 << (index % 8);
         if value {
@@ -34,18 +37,19 @@ impl PackedLattice for bool {
     }
 }
 
-// TODO: from DRAM, packing overhead here is ~2x that of an unsafe unaligned
-// 8-byte load. Find out why, and consider switching.
 impl PackedLattice for U24 {
+    #[inline]
     fn byte_count(bucket_count: usize) -> usize {
         bucket_count * 3 + 1
     }
 
+    #[inline]
     fn get(bytes: &[u8], index: usize) -> Self {
         let word = u32::from_le_bytes(bytes[index * 3..][..4].try_into().unwrap());
         U24::try_from(word & 0xff_ffff).expect("masked to 24 bits")
     }
 
+    #[inline]
     fn set(bytes: &mut [u8], index: usize, value: Self) {
         let slot: &mut [u8; 4] = (&mut bytes[index * 3..][..4]).try_into().unwrap();
         let word = u32::from_le_bytes(*slot) & !0xff_ffff | u32::from(value);
@@ -90,6 +94,7 @@ impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
         }
     }
 
+    #[inline]
     pub fn insert(&mut self, key: &K, value: &L) {
         for index in self.indices(key) {
             let bucket = L::get(&self.bytes, index);
@@ -117,12 +122,14 @@ impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
         }
     }
 
+    #[inline]
     pub fn query(&self, key: &K) -> L {
         let mut values = self.indices(key).map(|index| L::get(&self.bytes, index));
         let first = values.next().expect("buckets_per_key is at least 1");
         values.fold(first, |bound, value| bound.meet(&value))
     }
 
+    #[inline]
     fn indices(&self, key: &K) -> impl Iterator<Item = usize> + use<K, L, S> {
         bucket_indices(
             self.hash_builder.hash_one(key),
