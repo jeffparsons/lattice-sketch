@@ -1,6 +1,12 @@
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash};
 use std::marker::PhantomData;
 
+#[cfg(target_has_atomic = "64")]
+mod atomic;
+
+#[cfg(target_has_atomic = "64")]
+pub use atomic::AtomicSketch;
+
 /// A lattice.
 pub trait Lattice {
     /// The least upper bound of `self` and `other`.
