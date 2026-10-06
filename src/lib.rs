@@ -3,9 +3,11 @@ use std::marker::PhantomData;
 
 #[cfg(target_has_atomic = "8")]
 mod atomic;
+mod packed;
 
 #[cfg(target_has_atomic = "8")]
 pub use atomic::AtomicSketch;
+pub use packed::PackedSketch;
 
 /// A lattice.
 pub trait Lattice {
