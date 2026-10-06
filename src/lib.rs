@@ -3,10 +3,12 @@ use std::marker::PhantomData;
 
 #[cfg(target_has_atomic = "8")]
 mod atomic;
+mod narrow_integers;
 mod packed;
 
 #[cfg(target_has_atomic = "8")]
 pub use atomic::AtomicSketch;
+pub use narrow_integers::{OutOfRangeError, U24};
 pub use packed::PackedSketch;
 
 /// A lattice.
@@ -33,7 +35,7 @@ macro_rules! impl_lattice_for_integers {
 }
 
 impl_lattice_for_integers!(
-    u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize
+    u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize, U24
 );
 
 impl Lattice for bool {

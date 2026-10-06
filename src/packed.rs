@@ -1,41 +1,60 @@
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash};
 use std::marker::PhantomData;
 
-use crate::{assert_mergeable, bucket_indices};
+use crate::{U24, assert_mergeable, bucket_indices};
 
 mod sealed {
     use crate::Lattice;
 
     pub trait PackedLattice: Lattice + Copy {
-        fn word_count(bucket_count: usize) -> usize;
-        fn get(words: &[u64], index: usize) -> Self;
-        fn set(words: &mut [u64], index: usize, value: Self);
+        fn byte_count(bucket_count: usize) -> usize;
+        fn get(bytes: &[u8], index: usize) -> Self;
+        fn set(bytes: &mut [u8], index: usize, value: Self);
     }
 }
 
 use sealed::PackedLattice;
 
 impl PackedLattice for bool {
-    fn word_count(bucket_count: usize) -> usize {
-        bucket_count.div_ceil(64)
+    fn byte_count(bucket_count: usize) -> usize {
+        bucket_count.div_ceil(8)
     }
 
-    fn get(words: &[u64], index: usize) -> Self {
-        words[index / 64] & (1 << (index % 64)) != 0
+    fn get(bytes: &[u8], index: usize) -> Self {
+        bytes[index / 8] & (1 << (index % 8)) != 0
     }
 
-    fn set(words: &mut [u64], index: usize, value: Self) {
-        let bit = 1 << (index % 64);
+    fn set(bytes: &mut [u8], index: usize, value: Self) {
+        let bit = 1 << (index % 8);
         if value {
-            words[index / 64] |= bit;
+            bytes[index / 8] |= bit;
         } else {
-            words[index / 64] &= !bit;
+            bytes[index / 8] &= !bit;
         }
     }
 }
 
+// TODO: from DRAM, packing overhead here is ~2x that of an unsafe unaligned
+// 8-byte load. Find out why, and consider switching.
+impl PackedLattice for U24 {
+    fn byte_count(bucket_count: usize) -> usize {
+        bucket_count * 3 + 1
+    }
+
+    fn get(bytes: &[u8], index: usize) -> Self {
+        let word = u32::from_le_bytes(bytes[index * 3..][..4].try_into().unwrap());
+        U24::try_from(word & 0xff_ffff).expect("masked to 24 bits")
+    }
+
+    fn set(bytes: &mut [u8], index: usize, value: Self) {
+        let slot: &mut [u8; 4] = (&mut bytes[index * 3..][..4]).try_into().unwrap();
+        let word = u32::from_le_bytes(*slot) & !0xff_ffff | u32::from(value);
+        *slot = word.to_le_bytes();
+    }
+}
+
 pub struct PackedSketch<K, L: PackedLattice, S = BuildHasherDefault<DefaultHasher>> {
-    words: Vec<u64>,
+    bytes: Vec<u8>,
     bucket_count: usize,
     buckets_per_key: usize,
     hash_builder: S,
@@ -57,13 +76,13 @@ impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
     ) -> Self {
         assert!(bucket_count > 0, "bucket_count must be at least 1");
         assert!(buckets_per_key > 0, "buckets_per_key must be at least 1");
-        let mut words = vec![0; L::word_count(bucket_count)];
+        let mut bytes = vec![0; L::byte_count(bucket_count)];
         // TODO: fill whole words at once instead of setting each bucket.
         for index in 0..bucket_count {
-            L::set(&mut words, index, initial);
+            L::set(&mut bytes, index, initial);
         }
         PackedSketch {
-            words,
+            bytes,
             bucket_count,
             buckets_per_key,
             hash_builder,
@@ -73,8 +92,8 @@ impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
 
     pub fn insert(&mut self, key: &K, value: &L) {
         for index in self.indices(key) {
-            let bucket = L::get(&self.words, index);
-            L::set(&mut self.words, index, bucket.join(value));
+            let bucket = L::get(&self.bytes, index);
+            L::set(&mut self.bytes, index, bucket.join(value));
         }
     }
 
@@ -92,14 +111,14 @@ impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
         );
         // TODO: join whole words at once (OR for `bool`) instead of each bucket.
         for index in 0..self.bucket_count {
-            let bucket = L::get(&self.words, index);
-            let other_bucket = L::get(&other.words, index);
-            L::set(&mut self.words, index, bucket.join(&other_bucket));
+            let bucket = L::get(&self.bytes, index);
+            let other_bucket = L::get(&other.bytes, index);
+            L::set(&mut self.bytes, index, bucket.join(&other_bucket));
         }
     }
 
     pub fn query(&self, key: &K) -> L {
-        let mut values = self.indices(key).map(|index| L::get(&self.words, index));
+        let mut values = self.indices(key).map(|index| L::get(&self.bytes, index));
         let first = values.next().expect("buckets_per_key is at least 1");
         values.fold(first, |bound, value| bound.meet(&value))
     }
@@ -137,6 +156,24 @@ mod tests {
     }
 
     #[test]
+    fn u24_answers_match_plain_sketch() {
+        let value_for = |key: u64| U24::try_from((key * 2_654_435_761 % (1 << 24)) as u32).unwrap();
+        for bucket_count in [1, 64, 100] {
+            for initial in [0u16, 1000] {
+                let mut plain = Sketch::new(bucket_count, 3, U24::from(initial));
+                let mut packed = PackedSketch::new(bucket_count, 3, U24::from(initial));
+                for key in 0..200u64 {
+                    plain.insert(&key, &value_for(key));
+                    packed.insert(&key, &value_for(key));
+                }
+                for key in 0..400u64 {
+                    assert_eq!(packed.query(&key), plain.query(&key));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn merging_equals_inserting_everything_into_one_sketch() {
         let mut left = PackedSketch::new(100, 3, false);
         let mut right = PackedSketch::new(100, 3, false);
@@ -150,7 +187,7 @@ mod tests {
             both.insert(&key, &true);
         }
         left.merge(&right);
-        assert_eq!(left.words, both.words);
+        assert_eq!(left.bytes, both.bytes);
     }
 
     #[test]
