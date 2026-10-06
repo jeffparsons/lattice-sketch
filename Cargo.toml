@@ -10,3 +10,10 @@ keywords = ["lattice", "sketch", "bloom-filter", "probabilistic"]
 categories = ["data-structures", "algorithms"]
 
 [dependencies]
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "sketches"
+harness = false
