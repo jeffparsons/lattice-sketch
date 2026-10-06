@@ -1,7 +1,7 @@
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash};
 use std::marker::PhantomData;
 
-use crate::{U24, assert_mergeable, bucket_indices};
+use crate::{U24, U40, U48, U56, assert_mergeable, bucket_indices};
 
 mod sealed {
     use crate::Lattice;
@@ -37,24 +37,39 @@ impl PackedLattice for bool {
     }
 }
 
-impl PackedLattice for U24 {
-    #[inline]
-    fn byte_count(bucket_count: usize) -> usize {
-        bucket_count * 3 + 1
-    }
+macro_rules! impl_packed_lattice_for_narrow_integers {
+    ($($name:ident => $bytes:literal bytes in $repr:ty);* $(;)?) => {$(
+        impl PackedLattice for $name {
+            #[inline]
+            fn byte_count(bucket_count: usize) -> usize {
+                bucket_count * $bytes + (size_of::<$repr>() - $bytes)
+            }
 
-    #[inline]
-    fn get(bytes: &[u8], index: usize) -> Self {
-        let word = u32::from_le_bytes(bytes[index * 3..][..4].try_into().unwrap());
-        U24::try_from(word & 0xff_ffff).expect("masked to 24 bits")
-    }
+            #[inline]
+            fn get(bytes: &[u8], index: usize) -> Self {
+                let word = <$repr>::from_le_bytes(
+                    bytes[index * $bytes..][..size_of::<$repr>()].try_into().unwrap(),
+                );
+                $name::try_from(word & ((1 << ($bytes * 8)) - 1)).expect("masked to fit")
+            }
 
-    #[inline]
-    fn set(bytes: &mut [u8], index: usize, value: Self) {
-        let slot: &mut [u8; 4] = (&mut bytes[index * 3..][..4]).try_into().unwrap();
-        let word = u32::from_le_bytes(*slot) & !0xff_ffff | u32::from(value);
-        *slot = word.to_le_bytes();
-    }
+            #[inline]
+            fn set(bytes: &mut [u8], index: usize, value: Self) {
+                let slot: &mut [u8; size_of::<$repr>()] =
+                    (&mut bytes[index * $bytes..][..size_of::<$repr>()]).try_into().unwrap();
+                let mask: $repr = (1 << ($bytes * 8)) - 1;
+                let word = <$repr>::from_le_bytes(*slot) & !mask | <$repr>::from(value);
+                *slot = word.to_le_bytes();
+            }
+        }
+    )*};
+}
+
+impl_packed_lattice_for_narrow_integers! {
+    U24 => 3 bytes in u32;
+    U40 => 5 bytes in u64;
+    U48 => 6 bytes in u64;
+    U56 => 7 bytes in u64;
 }
 
 pub struct PackedSketch<K, L: PackedLattice, S = BuildHasherDefault<DefaultHasher>> {
@@ -163,21 +178,29 @@ mod tests {
     }
 
     #[test]
-    fn u24_answers_match_plain_sketch() {
-        let value_for = |key: u64| U24::try_from((key * 2_654_435_761 % (1 << 24)) as u32).unwrap();
-        for bucket_count in [1, 64, 100] {
-            for initial in [0u16, 1000] {
-                let mut plain = Sketch::new(bucket_count, 3, U24::from(initial));
-                let mut packed = PackedSketch::new(bucket_count, 3, U24::from(initial));
-                for key in 0..200u64 {
-                    plain.insert(&key, &value_for(key));
-                    packed.insert(&key, &value_for(key));
+    fn narrow_integer_answers_match_plain_sketch() {
+        macro_rules! check {
+            ($($name:ident: $bits:literal bits in $repr:ty);*) => {$(
+                let value_for = |key: u64| {
+                    let spread = key.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (64 - $bits);
+                    $name::try_from(spread as $repr).unwrap()
+                };
+                for bucket_count in [1, 64, 100] {
+                    for initial in [0u16, 1000] {
+                        let mut plain = Sketch::new(bucket_count, 3, $name::from(initial));
+                        let mut packed = PackedSketch::new(bucket_count, 3, $name::from(initial));
+                        for key in 0..200u64 {
+                            plain.insert(&key, &value_for(key));
+                            packed.insert(&key, &value_for(key));
+                        }
+                        for key in 0..400u64 {
+                            assert_eq!(packed.query(&key), plain.query(&key));
+                        }
+                    }
                 }
-                for key in 0..400u64 {
-                    assert_eq!(packed.query(&key), plain.query(&key));
-                }
-            }
+            )*};
         }
+        check!(U24: 24 bits in u32; U40: 40 bits in u64; U48: 48 bits in u64; U56: 56 bits in u64);
     }
 
     #[test]

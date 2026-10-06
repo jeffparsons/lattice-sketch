@@ -1,7 +1,7 @@
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use lattice_sketch::{AtomicSketch, PackedSketch, Sketch, U24};
+use lattice_sketch::{AtomicSketch, PackedSketch, Sketch, U24, U40, U48, U56};
 
 const BUCKETS_PER_KEY: usize = 4;
 // Inserted before timing so every memory page gets written; reads from untouched pages would look cached.
@@ -72,6 +72,27 @@ fn sketches(criterion: &mut Criterion) {
         "PackedSketch<U24>",
         |budget: usize| PackedSketch::<u64, U24>::new(budget / 3, BUCKETS_PER_KEY, U24::from(0u8)),
         |key: u64| U24::from(key as u16),
+        [insert]
+    );
+    bench_sketch!(
+        criterion,
+        "PackedSketch<U40>",
+        |budget: usize| PackedSketch::<u64, U40>::new(budget / 5, BUCKETS_PER_KEY, U40::from(0u8)),
+        |key: u64| U40::from(key as u32),
+        [insert]
+    );
+    bench_sketch!(
+        criterion,
+        "PackedSketch<U48>",
+        |budget: usize| PackedSketch::<u64, U48>::new(budget / 6, BUCKETS_PER_KEY, U48::from(0u8)),
+        |key: u64| U48::from(key as u32),
+        [insert]
+    );
+    bench_sketch!(
+        criterion,
+        "PackedSketch<U56>",
+        |budget: usize| PackedSketch::<u64, U56>::new(budget / 7, BUCKETS_PER_KEY, U56::from(0u8)),
+        |key: u64| U56::from(key as u32),
         [insert]
     );
     bench_sketch!(

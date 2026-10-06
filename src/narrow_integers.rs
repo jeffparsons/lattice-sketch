@@ -1,40 +1,46 @@
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct U24(u32);
+macro_rules! narrow_integers {
+    ($($name:ident: $bits:literal bits in $repr:ty, from [$($narrower:ty),*]);* $(;)?) => {$(
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $name($repr);
 
-impl From<u8> for U24 {
-    #[inline]
-    fn from(value: u8) -> Self {
-        U24(value.into())
-    }
-}
+        $(
+            impl From<$narrower> for $name {
+                #[inline]
+                fn from(value: $narrower) -> Self {
+                    $name(value.into())
+                }
+            }
+        )*
 
-impl From<u16> for U24 {
-    #[inline]
-    fn from(value: u16) -> Self {
-        U24(value.into())
-    }
-}
+        impl TryFrom<$repr> for $name {
+            type Error = OutOfRangeError;
 
-impl TryFrom<u32> for U24 {
-    type Error = OutOfRangeError;
-
-    #[inline]
-    fn try_from(value: u32) -> Result<Self, OutOfRangeError> {
-        if value < 1 << 24 {
-            Ok(U24(value))
-        } else {
-            Err(OutOfRangeError(()))
+            #[inline]
+            fn try_from(value: $repr) -> Result<Self, OutOfRangeError> {
+                if value < 1 << $bits {
+                    Ok($name(value))
+                } else {
+                    Err(OutOfRangeError(()))
+                }
+            }
         }
-    }
+
+        impl From<$name> for $repr {
+            #[inline]
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+    )*};
 }
 
-impl From<U24> for u32 {
-    #[inline]
-    fn from(value: U24) -> Self {
-        value.0
-    }
+narrow_integers! {
+    U24: 24 bits in u32, from [u8, u16];
+    U40: 40 bits in u64, from [u8, u16, u32];
+    U48: 48 bits in u64, from [u8, u16, u32];
+    U56: 56 bits in u64, from [u8, u16, u32];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,13 +59,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn u24_accepts_exactly_the_values_that_fit_in_24_bits() {
-        assert_eq!(U24::try_from(0u32).map(u32::from), Ok(0));
-        assert_eq!(
-            U24::try_from((1u32 << 24) - 1).map(u32::from),
-            Ok((1 << 24) - 1)
-        );
-        assert_eq!(U24::try_from(1u32 << 24), Err(OutOfRangeError(())));
-        assert_eq!(U24::try_from(u32::MAX), Err(OutOfRangeError(())));
+    fn each_type_accepts_exactly_the_values_that_fit_in_its_bits() {
+        macro_rules! check {
+            ($($name:ident: $bits:literal bits in $repr:ty);*) => {$(
+                let largest: $repr = (1 << $bits) - 1;
+                assert_eq!($name::try_from(0 as $repr).map(<$repr>::from), Ok(0));
+                assert_eq!($name::try_from(largest).map(<$repr>::from), Ok(largest));
+                assert_eq!($name::try_from(largest + 1), Err(OutOfRangeError(())));
+                assert_eq!($name::try_from(<$repr>::MAX), Err(OutOfRangeError(())));
+            )*};
+        }
+        check!(U24: 24 bits in u32; U40: 40 bits in u64; U48: 48 bits in u64; U56: 56 bits in u64);
     }
 }
