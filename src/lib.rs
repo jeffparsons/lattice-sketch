@@ -93,18 +93,13 @@ impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
     where
         S: PartialEq,
     {
-        assert_eq!(
+        assert_mergeable(
             self.buckets.len(),
             other.buckets.len(),
-            "bucket counts must match"
-        );
-        assert_eq!(
-            self.buckets_per_key, other.buckets_per_key,
-            "buckets_per_key must match"
-        );
-        assert!(
-            self.hash_builder == other.hash_builder,
-            "hashers must be equal"
+            self.buckets_per_key,
+            other.buckets_per_key,
+            &self.hash_builder,
+            &other.hash_builder,
         );
         for (bucket, other_bucket) in self.buckets.iter_mut().zip(&other.buckets) {
             *bucket = bucket.join(other_bucket);
@@ -127,6 +122,22 @@ impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
             self.buckets_per_key,
         )
     }
+}
+
+fn assert_mergeable<S: PartialEq>(
+    bucket_count: usize,
+    other_bucket_count: usize,
+    buckets_per_key: usize,
+    other_buckets_per_key: usize,
+    hash_builder: &S,
+    other_hash_builder: &S,
+) {
+    assert_eq!(bucket_count, other_bucket_count, "bucket counts must match");
+    assert_eq!(
+        buckets_per_key, other_buckets_per_key,
+        "buckets_per_key must match"
+    );
+    assert!(hash_builder == other_hash_builder, "hashers must be equal");
 }
 
 fn bucket_indices(

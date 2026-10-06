@@ -2,7 +2,7 @@ use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::bucket_indices;
+use crate::{assert_mergeable, bucket_indices};
 
 mod sealed {
     use crate::Lattice;
@@ -124,10 +124,49 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    pub fn merge(&mut self, other: &Self)
+    where
+        S: PartialEq,
+    {
+        self.assert_mergeable(other);
+        for (bucket, other_bucket) in self.buckets.iter_mut().zip(&other.buckets) {
+            let bucket = L::get_mut(bucket);
+            *bucket = bucket.join(&L::load(other_bucket));
+        }
+    }
+
+    pub fn merge_shared(&self, other: &Self)
+    where
+        S: PartialEq,
+    {
+        self.assert_mergeable(other);
+        for (bucket, other_bucket) in self.buckets.iter().zip(&other.buckets) {
+            let value = L::load(other_bucket);
+            let current = L::load(bucket);
+            if current.join(&value) != current {
+                L::fetch_join(bucket, value);
+            }
+        }
+    }
+
     pub fn query(&self, key: &K) -> L {
         let mut values = self.indices(key).map(|index| L::load(&self.buckets[index]));
         let first = values.next().expect("buckets_per_key is at least 1");
         values.fold(first, |bound, value| bound.meet(&value))
+    }
+
+    fn assert_mergeable(&self, other: &Self)
+    where
+        S: PartialEq,
+    {
+        assert_mergeable(
+            self.buckets.len(),
+            other.buckets.len(),
+            self.buckets_per_key,
+            other.buckets_per_key,
+            &self.hash_builder,
+            &other.hash_builder,
+        );
     }
 
     fn indices(&self, key: &K) -> impl Iterator<Item = usize> + use<K, L, S> {
@@ -226,6 +265,50 @@ mod tests {
         for key in 0..400u64 {
             assert_eq!(exclusive.query(&key), plain.query(&key));
             assert_eq!(shared.query(&key), plain.query(&key));
+        }
+    }
+
+    #[test]
+    fn merging_equals_inserting_everything_into_one_sketch() {
+        for shared in [false, true] {
+            let mut left = AtomicSketch::new(64, 3, 0u64);
+            let right = AtomicSketch::new(64, 3, 0u64);
+            let both = AtomicSketch::new(64, 3, 0u64);
+            for key in 0..150u64 {
+                let value = (key * 7919) % 1000;
+                left.insert_shared(&key, &value);
+                both.insert_shared(&key, &value);
+            }
+            for key in 50..200u64 {
+                let value = (key * 7919 + 104_729) % 1000;
+                right.insert_shared(&key, &value);
+                both.insert_shared(&key, &value);
+            }
+            if shared {
+                left.merge_shared(&right);
+            } else {
+                left.merge(&right);
+            }
+            let loaded = |sketch: &AtomicSketch<u64, u64>| -> Vec<u64> {
+                sketch.buckets.iter().map(u64::load).collect()
+            };
+            assert_eq!(loaded(&left), loaded(&both));
+        }
+    }
+
+    #[test]
+    fn merging_floors_never_inserted_keys_at_the_join_of_both_initial_values() {
+        for shared in [false, true] {
+            let mut left = AtomicSketch::new(64, 3, 10u64);
+            let right = AtomicSketch::new(64, 3, 20u64);
+            if shared {
+                left.merge_shared(&right);
+            } else {
+                left.merge(&right);
+            }
+            for key in ["absent", "missing", "nowhere"] {
+                assert_eq!(left.query(&key), 20);
+            }
         }
     }
 
