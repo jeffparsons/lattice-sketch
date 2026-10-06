@@ -89,6 +89,28 @@ impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
         }
     }
 
+    pub fn merge(&mut self, other: &Self)
+    where
+        S: PartialEq,
+    {
+        assert_eq!(
+            self.buckets.len(),
+            other.buckets.len(),
+            "bucket counts must match"
+        );
+        assert_eq!(
+            self.buckets_per_key, other.buckets_per_key,
+            "buckets_per_key must match"
+        );
+        assert!(
+            self.hash_builder == other.hash_builder,
+            "hashers must be equal"
+        );
+        for (bucket, other_bucket) in self.buckets.iter_mut().zip(&other.buckets) {
+            *bucket = bucket.join(other_bucket);
+        }
+    }
+
     pub fn query(&self, key: &K) -> L {
         let mut values = self.indices(key).map(|index| &self.buckets[index]);
         let first = values
@@ -225,5 +247,68 @@ mod tests {
         for key in ["absent", "missing", "nowhere"] {
             assert!(sketch.query(&key) >= 10);
         }
+    }
+
+    #[test]
+    fn merging_equals_inserting_everything_into_one_sketch() {
+        let mut left = Sketch::new(64, 3, 0u64);
+        let mut right = Sketch::new(64, 3, 0u64);
+        let mut both = Sketch::new(64, 3, 0u64);
+        for key in 0..150u64 {
+            let value = (key * 7919) % 1000;
+            left.insert(&key, &value);
+            both.insert(&key, &value);
+        }
+        for key in 50..200u64 {
+            let value = (key * 7919 + 104_729) % 1000;
+            right.insert(&key, &value);
+            both.insert(&key, &value);
+        }
+        left.merge(&right);
+        assert_eq!(left.buckets, both.buckets);
+    }
+
+    #[test]
+    fn merging_floors_never_inserted_keys_at_the_join_of_both_initial_values() {
+        let mut left = Sketch::new(64, 3, 10u64);
+        let right = Sketch::new(64, 3, 20u64);
+        left.merge(&right);
+        for key in ["absent", "missing", "nowhere"] {
+            assert_eq!(left.query(&key), 20);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "bucket counts must match")]
+    fn merging_different_bucket_counts_panics() {
+        let mut sketch = Sketch::<u64, u64>::new(64, 3, 0);
+        sketch.merge(&Sketch::new(32, 3, 0));
+    }
+
+    #[test]
+    #[should_panic(expected = "buckets_per_key must match")]
+    fn merging_different_buckets_per_key_panics() {
+        let mut sketch = Sketch::<u64, u64>::new(64, 3, 0);
+        sketch.merge(&Sketch::new(64, 4, 0));
+    }
+
+    #[test]
+    #[should_panic(expected = "hashers must be equal")]
+    fn merging_different_hashers_panics() {
+        #[derive(PartialEq)]
+        struct SeededHasher(u64);
+
+        impl BuildHasher for SeededHasher {
+            type Hasher = DefaultHasher;
+
+            fn build_hasher(&self) -> DefaultHasher {
+                let mut hasher = DefaultHasher::new();
+                std::hash::Hasher::write_u64(&mut hasher, self.0);
+                hasher
+            }
+        }
+
+        let mut sketch = Sketch::<u64, u64, _>::with_hasher(64, 3, 0, SeededHasher(1));
+        sketch.merge(&Sketch::with_hasher(64, 3, 0, SeededHasher(2)));
     }
 }
