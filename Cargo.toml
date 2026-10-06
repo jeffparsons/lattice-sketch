@@ -1,6 +1,6 @@
 [package]
 name = "lattice-sketch"
-version = "0.0.0"
+version = "0.0.1"
 edition = "2024"
 rust-version = "1.99"
 description = "Space-efficient sketches of lattice-valued functions, generalising the Bloom filter"
