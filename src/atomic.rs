@@ -85,6 +85,13 @@ impl AtomicLattice for bool {
     }
 }
 
+/// A sketch that can be updated by concurrent writers without locking.
+///
+/// Each bucket is a [`std::sync::atomic`] type. [`insert_shared`](Self::insert_shared) and
+/// [`merge_shared`](Self::merge_shared) take `&self` and may be called from any number of threads
+/// at once; [`insert`](Self::insert) and [`merge`](Self::merge) take `&mut self` and do the same
+/// work with plain memory accesses. The value type must be `bool` or an integer type with an
+/// atomic counterpart on the target, so `u128`, `i128` and the narrow integer types are excluded.
 pub struct AtomicSketch<K, L: AtomicLattice, S = BuildHasherDefault<DefaultHasher>> {
     buckets: Vec<L::Atomic>,
     buckets_per_key: usize,

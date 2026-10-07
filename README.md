@@ -5,4 +5,4 @@
 [![Build status](https://github.com/jeffparsons/lattice-sketch/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jeffparsons/lattice-sketch/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/rust-1.99%2B-blue.svg)](https://github.com/jeffparsons/lattice-sketch)
 
-WIP
+Sketches that approximate inserted values from above, generalising the Bloom filter.

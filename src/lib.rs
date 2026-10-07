@@ -1,3 +1,30 @@
+//! Sketches that approximate inserted values from above, generalising the Bloom filter.
+//!
+//! Inserting a value hashes its key to a small number of buckets and updates each of them to an
+//! upper bound of its old value and the inserted value. A query for a key returns an upper bound
+//! on every value ever inserted for that key — often the tightest such bound, but possibly a
+//! looser one, because other keys share buckets.
+//!
+//! Also called _compact approximators_ by Boldi and Vigna (2003).[^boldi-vigna]
+//!
+//! [^boldi-vigna]: Paolo Boldi and Sebastiano Vigna, "Compact Approximation of Lattice
+//!     Functions with Applications to Large-Alphabet Text Search", 2003.
+//!     <https://arxiv.org/abs/cs/0306046>
+//!
+//! # Lattices
+//!
+//! Values are elements of a [`Lattice`]: a type with a partial order in which any two values have
+//! a least upper bound, called their _join_, and a greatest lower bound, called their _meet_.
+//! Integers form a lattice under their usual ordering, where the join of two numbers is simply the
+//! greater of the two and the meet is the lesser. Booleans form one too, with `false` below
+//! `true`: join is logical _or_ and meet is logical _and_. Seen this way, the better-known Bloom
+//! filter is a sketch of `bool`s into which only `true` is ever inserted.
+//!
+//! In both cases join and meet pick one of the two values, but only because integers and booleans
+//! are _totally_ ordered. In a lattice in general, two values need not be comparable, and their
+//! join may be a third value above both — for sets ordered by inclusion, say, the join of two sets
+//! is their union, and the meet their intersection.
+
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash};
 use std::marker::PhantomData;
 
@@ -11,7 +38,16 @@ pub use atomic::AtomicSketch;
 pub use narrow_integers::{OutOfRangeError, U24, U40, U48, U56};
 pub use packed::PackedSketch;
 
-/// A lattice.
+/// A type whose values form a lattice: any pair of values has a least upper bound and a greatest
+/// lower bound.
+///
+/// Implementations must make [`join`](Self::join) and [`meet`](Self::meet) commutative,
+/// associative and idempotent, and must make them agree with each other:
+/// `a.join(&a.meet(&b)) == a` and `a.meet(&a.join(&b)) == a` for all `a` and `b`. Sketches rely
+/// on these laws; an implementation that breaks them will cause a sketch to return incorrect
+/// answers.
+///
+/// Implemented for all integer types and for `bool` under their usual ordering.
 pub trait Lattice {
     /// The least upper bound of `self` and `other`.
     fn join(&self, other: &Self) -> Self;
@@ -52,15 +88,11 @@ impl Lattice for bool {
     }
 }
 
-/// A lattice sketch.
+/// A sketch over any [`Lattice`], stored as a plain `Vec` of bucket values.
 ///
-/// Approximates inserted values from above.
-///
-/// Also called a _compact approximator_ by Boldi and Vigna (2003).[^boldi-vigna]
-///
-/// [^boldi-vigna]: Paolo Boldi and Sebastiano Vigna, "Compact Approximation of Lattice
-///     Functions with Applications to Large-Alphabet Text Search", 2003.
-///     <https://arxiv.org/abs/cs/0306046>
+/// This is the general-purpose variant. [`AtomicSketch`] allows concurrent inserts through a
+/// shared reference, and [`PackedSketch`] stores narrow value types more densely. See the
+/// [crate-level documentation](crate) for how sketches work.
 pub struct Sketch<K, L, S = BuildHasherDefault<DefaultHasher>> {
     buckets: Vec<L>,
     buckets_per_key: usize,
@@ -69,12 +101,30 @@ pub struct Sketch<K, L, S = BuildHasherDefault<DefaultHasher>> {
 }
 
 impl<K: Hash, L: Lattice + Clone> Sketch<K, L> {
+    /// Makes a new sketch with `bucket_count` buckets, each holding `initial`, in which each key
+    /// maps to `buckets_per_key` of them.
+    ///
+    /// `initial` is the answer every query returns until something is inserted. In general this
+    /// should be the lowest value you ever intend to insert.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `bucket_count` or `buckets_per_key` is zero.
     pub fn new(bucket_count: usize, buckets_per_key: usize, initial: L) -> Self {
         Self::with_hasher(bucket_count, buckets_per_key, initial, Default::default())
     }
 }
 
 impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
+    /// Makes a new sketch like [`new`](Self::new), but hashing keys with `hash_builder` instead
+    /// of the default hasher.
+    ///
+    /// Two sketches can only be [merged](Self::merge) if they were built with equal hash
+    /// builders.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `bucket_count` or `buckets_per_key` is zero.
     pub fn with_hasher(
         bucket_count: usize,
         buckets_per_key: usize,
@@ -91,6 +141,10 @@ impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
         }
     }
 
+    /// Inserts `value` for `key`.
+    ///
+    /// Each of the key's buckets is raised to the [join](Lattice::join) of its current value and
+    /// `value`, so subsequent queries for `key` return a value at least `value`.
     #[inline]
     pub fn insert(&mut self, key: &K, value: &L) {
         for index in self.indices(key) {
@@ -98,6 +152,15 @@ impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
         }
     }
 
+    /// Merges `other` into `self`, so that `self` afterwards answers every query with an upper
+    /// bound on everything inserted into either sketch.
+    ///
+    /// Each bucket becomes the [join](Lattice::join) of the two sketches' corresponding buckets.
+    /// The result is identical to having made every insert into one sketch, in any order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the two sketches differ in bucket count, buckets per key, or hash builder.
     pub fn merge(&mut self, other: &Self)
     where
         S: PartialEq,
@@ -115,6 +178,11 @@ impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
         }
     }
 
+    /// Returns an upper bound on every value ever inserted for `key`.
+    ///
+    /// The bound is the [meet](Lattice::meet) of the key's buckets. It is often the tightest
+    /// possible — the [join](Lattice::join) of everything inserted for `key` — but can be looser
+    /// when other keys share buckets. Before anything is inserted every query returns `initial`.
     #[inline]
     pub fn query(&self, key: &K) -> L {
         let mut values = self.indices(key).map(|index| &self.buckets[index]);
