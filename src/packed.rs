@@ -73,6 +73,13 @@ impl_packed_lattice_for_narrow_integers! {
     U56 => 7 bytes in u64;
 }
 
+/// A sketch that stores narrow value types more densely than [`Sketch`](crate::Sketch) does.
+///
+/// `Sketch<K, L>` stores each bucket as a whole `L`, so a `bool` bucket takes a byte and a
+/// [`U24`] bucket four. `PackedSketch` stores `bool` buckets at one bit each and [`U24`], [`U40`],
+/// [`U48`] and [`U56`] buckets at three, five, six and seven bytes, so for the same memory it has
+/// more buckets and therefore gives tighter bounds. Those are the only value types it supports.
+/// Each operation costs a little more than on `Sketch`, because of the unpacking.
 pub struct PackedSketch<K, L: PackedLattice, S = BuildHasherDefault<DefaultHasher>> {
     bytes: Vec<u8>,
     bucket_count: usize,
@@ -82,12 +89,30 @@ pub struct PackedSketch<K, L: PackedLattice, S = BuildHasherDefault<DefaultHashe
 }
 
 impl<K: Hash, L: PackedLattice> PackedSketch<K, L> {
+    /// Makes a new sketch with `bucket_count` buckets, each holding `initial`, in which each key
+    /// maps to `buckets_per_key` of them.
+    ///
+    /// `initial` is the answer every query returns until something is inserted. In general this
+    /// should be the lowest value you ever intend to insert.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `bucket_count` or `buckets_per_key` is zero.
     pub fn new(bucket_count: usize, buckets_per_key: usize, initial: L) -> Self {
         Self::with_hasher(bucket_count, buckets_per_key, initial, Default::default())
     }
 }
 
 impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
+    /// Makes a new sketch like [`new`](Self::new), but hashing keys with `hash_builder` instead
+    /// of the default hasher.
+    ///
+    /// Two sketches can only be [merged](Self::merge) if they were built with equal hash
+    /// builders.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `bucket_count` or `buckets_per_key` is zero.
     pub fn with_hasher(
         bucket_count: usize,
         buckets_per_key: usize,
@@ -110,6 +135,10 @@ impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
         }
     }
 
+    /// Inserts `value` for `key`.
+    ///
+    /// Each of the key's buckets is raised to the [join](crate::Lattice::join) of its current
+    /// value and `value`, so subsequent queries for `key` return a value at least `value`.
     #[inline]
     pub fn insert(&mut self, key: &K, value: &L) {
         for index in self.indices(key) {
@@ -118,6 +147,16 @@ impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
         }
     }
 
+    /// Merges `other` into `self`, so that `self` afterwards answers every query with an upper
+    /// bound on everything inserted into either sketch.
+    ///
+    /// Each bucket becomes the [join](crate::Lattice::join) of the two sketches' corresponding
+    /// buckets. The result is identical to having made every insert into one sketch, in any
+    /// order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the two sketches differ in bucket count, buckets per key, or hash builder.
     pub fn merge(&mut self, other: &Self)
     where
         S: PartialEq,
@@ -138,6 +177,12 @@ impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
         }
     }
 
+    /// Returns an upper bound on every value ever inserted for `key`.
+    ///
+    /// The bound is the [meet](crate::Lattice::meet) of the key's buckets. It is often the
+    /// tightest possible — the [join](crate::Lattice::join) of everything inserted for `key` —
+    /// but can be looser when other keys share buckets. Before anything is inserted every query
+    /// returns `initial`.
     #[inline]
     pub fn query(&self, key: &K) -> L {
         let mut values = self.indices(key).map(|index| L::get(&self.bytes, index));

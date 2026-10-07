@@ -2,6 +2,14 @@ use std::fmt;
 
 macro_rules! narrow_integers {
     ($($name:ident: $bits:literal bits in $repr:ty, from [$($narrower:ty),*]);* $(;)?) => {$(
+        #[doc = concat!(
+            "An unsigned ", $bits, "-bit integer, stored in a `", stringify!($repr), "`.\n\n",
+            "Exists so that [`PackedSketch`](crate::PackedSketch) can store a bucket in ", $bits,
+            " bits rather than a whole `", stringify!($repr), "`. Forms a ",
+            "[`Lattice`](crate::Lattice) under its usual ordering like the built-in integers. ",
+            "Convert from narrower integer types with `From`, from `", stringify!($repr),
+            "` with `TryFrom`, and back to `", stringify!($repr), "` with `From`.",
+        )]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name($repr);
 
@@ -43,6 +51,8 @@ narrow_integers! {
     U56: 56 bits in u64, from [u8, u16, u32];
 }
 
+/// The error returned when converting an integer into [`U24`], [`U40`], [`U48`] or [`U56`] that
+/// doesn't fit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutOfRangeError(());
 
