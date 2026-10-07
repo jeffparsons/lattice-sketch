@@ -100,12 +100,30 @@ pub struct AtomicSketch<K, L: AtomicLattice, S = BuildHasherDefault<DefaultHashe
 }
 
 impl<K: Hash, L: AtomicLattice> AtomicSketch<K, L> {
+    /// Makes a new sketch with `bucket_count` buckets, each holding `initial`, in which each key
+    /// maps to `buckets_per_key` of them.
+    ///
+    /// `initial` is the answer every query returns until something is inserted. In general this
+    /// should be the lowest value you ever intend to insert.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `bucket_count` or `buckets_per_key` is zero.
     pub fn new(bucket_count: usize, buckets_per_key: usize, initial: L) -> Self {
         Self::with_hasher(bucket_count, buckets_per_key, initial, Default::default())
     }
 }
 
 impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
+    /// Makes a new sketch like [`new`](Self::new), but hashing keys with `hash_builder` instead
+    /// of the default hasher.
+    ///
+    /// Two sketches can only be [merged](Self::merge) if they were built with equal hash
+    /// builders.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `bucket_count` or `buckets_per_key` is zero.
     pub fn with_hasher(
         bucket_count: usize,
         buckets_per_key: usize,
@@ -122,6 +140,12 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    /// Inserts `value` for `key`.
+    ///
+    /// Each of the key's buckets is raised to the [join](crate::Lattice::join) of its current value and
+    /// `value`, so subsequent queries for `key` return a value at least `value`. Requires
+    /// exclusive access; see [`insert_shared`](Self::insert_shared) to insert through a shared
+    /// reference.
     #[inline]
     pub fn insert(&mut self, key: &K, value: &L) {
         for index in self.indices(key) {
@@ -130,6 +154,19 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    /// Inserts `value` for `key` through a shared reference.
+    ///
+    /// Each of the key's buckets is updated by its own atomic read-modify-write, with no
+    /// synchronisation across buckets. A concurrent [`query`](Self::query) may therefore observe
+    /// some of an insert's bucket updates but not others. This never produces a wrong answer: a
+    /// bucket only ever moves up, and only to the join of values inserted into it, so whichever
+    /// mix of old and new buckets a query reads, its result is an upper bound on every insert
+    /// whose updates it observed in full — including every insert that completed before the
+    /// query began on the same thread.
+    ///
+    /// Bucket updates use [`Relaxed`](Ordering::Relaxed) ordering. To be sure of observing an
+    /// insert made on another thread, establish a happens-before relationship with it by other
+    /// means, such as a channel, a lock, or joining the thread.
     #[inline]
     pub fn insert_shared(&self, key: &K, value: &L) {
         for index in self.indices(key) {
@@ -141,6 +178,17 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    /// Merges `other` into `self`, so that `self` afterwards answers every query with an upper
+    /// bound on everything inserted into either sketch.
+    ///
+    /// Each bucket becomes the [join](crate::Lattice::join) of the two sketches' corresponding buckets.
+    /// The result is identical to having made every insert into one sketch, in any order.
+    /// Requires exclusive access; see [`merge_shared`](Self::merge_shared) to merge through a
+    /// shared reference.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the two sketches differ in bucket count, buckets per key, or hash builder.
     pub fn merge(&mut self, other: &Self)
     where
         S: PartialEq,
@@ -152,6 +200,15 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    /// Merges `other` into `self` through a shared reference.
+    ///
+    /// Equivalent to [`merge`](Self::merge), but each bucket is updated atomically, with the same
+    /// guarantees and caveats as [`insert_shared`](Self::insert_shared). `other` may be
+    /// concurrently updated too; the merge picks up whatever each of its buckets held when read.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the two sketches differ in bucket count, buckets per key, or hash builder.
     pub fn merge_shared(&self, other: &Self)
     where
         S: PartialEq,
@@ -166,6 +223,16 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    /// Returns an upper bound on every value ever inserted for `key`.
+    ///
+    /// The bound is the [meet](crate::Lattice::meet) of the key's buckets. It is often the
+    /// tightest possible — the [join](crate::Lattice::join) of everything inserted for `key` —
+    /// but can be looser when other keys share buckets. Before anything is inserted every query
+    /// returns `initial`.
+    ///
+    /// Buckets are read atomically, so this may be called concurrently with
+    /// [`insert_shared`](Self::insert_shared) and [`merge_shared`](Self::merge_shared); see
+    /// `insert_shared` for what a query can observe mid-insert.
     #[inline]
     pub fn query(&self, key: &K) -> L {
         let mut values = self.indices(key).map(|index| L::load(&self.buckets[index]));
