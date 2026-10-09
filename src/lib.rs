@@ -1,7 +1,8 @@
 //! Sketches that approximate inserted values from above, generalising the Bloom filter.
 //!
 //! A query for a key returns an upper bound on every value ever inserted for that key — often the
-//! tightest such bound, but possibly a looser one.
+//! tightest such bound, but possibly a looser one. With [`AtomicSketch`], this guarantee applies
+//! to inserts that happen before the query; updates on another thread require synchronisation.
 //!
 //! Also called _compact approximators_ by Boldi and Vigna (2003).[^boldi-vigna]
 //!
@@ -9,13 +10,46 @@
 //!     Functions with Applications to Large-Alphabet Text Search", 2003.
 //!     <https://arxiv.org/abs/cs/0306046>
 //!
+//! # Example
+//!
+//! Track an upper bound on the latest event time recorded for each device:
+//!
+//! ```
+//! use lattice_sketch::Sketch;
+//!
+//! // Event times are seconds since the Unix epoch, keyed by device ID.
+//! let mut latest_event = Sketch::new(1024, 3, 0u64);
+//! assert_eq!(latest_event.query(&"sensor-1"), 0);
+//!
+//! latest_event.insert(&"sensor-1", &1_700_000_060);
+//! latest_event.insert(&"sensor-1", &1_700_000_000); // An older event arrives later.
+//! latest_event.insert(&"sensor-2", &1_700_000_120);
+//! assert!(latest_event.query(&"sensor-1") >= 1_700_000_060);
+//! assert!(latest_event.query(&"sensor-2") >= 1_700_000_120);
+//! ```
+//!
+//! Insertion joins values rather than replacing them: for integers, it retains their maximum,
+//! so the late arrival of an older event does not lower the answer. Collisions can make a device
+//! appear more recently active than its recorded events justify, even if it has no recorded
+//! events. `initial` remains a lower bound on every answer, so choose it below all values you
+//! intend to insert.
+//!
+//! # Choosing parameters
+//!
+//! `bucket_count` controls storage: more buckets generally reduce collisions. `buckets_per_key`
+//! controls how many bucket accesses each insert and query performs. Increasing it can help a
+//! query find a tighter bound, but also updates more buckets per insert and may increase
+//! collisions. Tune both parameters for your workload and memory budget; neither guarantees a
+//! tighter answer for every key. Bucket indices can repeat, so `buckets_per_key` is not a
+//! guarantee of that many distinct buckets.
+//!
 //! # How it works
 //!
 //! Inserting a value hashes its key to a small number of buckets and updates each of them to an
-//! upper bound of its old value and the inserted value. A query for the key reads the same buckets
-//! and combines them into a bound that sits below all of them. Each bucket is already an upper
-//! bound on the key's values, so the combined bound is one too. It can be looser than the tightest
-//! bound because other keys share buckets.
+//! upper bound of its old value and the inserted value. A query takes the greatest lower bound
+//! of those buckets. Every value inserted for the key is a lower bound of all its buckets, so it
+//! lies below their greatest lower bound. The answer can be looser than the tightest bound because
+//! other keys share buckets or `initial` is not below all the inserted values.
 //!
 //! # Lattices
 //!
@@ -113,8 +147,10 @@ impl<K: Hash, L: Lattice + Clone> Sketch<K, L> {
     /// Makes a new sketch with `bucket_count` buckets, each holding `initial`, in which each key
     /// maps to `buckets_per_key` of them.
     ///
-    /// `initial` is the answer every query returns until something is inserted. In general this
-    /// should be the lowest value you ever intend to insert.
+    /// `initial` is the answer every query returns until something is inserted, and remains a
+    /// lower bound on every answer afterwards. Choose a lower bound on all values you intend to
+    /// insert: for example, `false` for booleans or the minimum value for integers. Starting
+    /// with `10` and inserting `3` still gives an answer of at least `10`, even without collisions.
     ///
     /// # Panics
     ///
@@ -162,10 +198,11 @@ impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
     }
 
     /// Merges `other` into `self`, so that `self` afterwards answers every query with an upper
-    /// bound on everything inserted into either sketch.
+    /// bound on every value inserted for that key into either sketch.
     ///
     /// Each bucket becomes the [join](Lattice::join) of the two sketches' corresponding buckets.
-    /// The result is identical to having made every insert into one sketch, in any order.
+    /// The result is identical to having made every insert into one sketch, in any order,
+    /// starting with the join of the two sketches' initial values.
     ///
     /// # Panics
     ///
@@ -189,9 +226,13 @@ impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
 
     /// Returns an upper bound on every value ever inserted for `key`.
     ///
-    /// The bound is the [meet](Lattice::meet) of the key's buckets. It is often the tightest
-    /// possible — the [join](Lattice::join) of everything inserted for `key` — but can be looser
-    /// when other keys share buckets. Before anything is inserted every query returns `initial`.
+    /// The bound is the [meet](Lattice::meet) of the key's buckets. It can equal the
+    /// [join](Lattice::join) of everything inserted for `key`, but can be looser when other
+    /// keys share buckets or `initial` is not below all the inserted values. Every answer is
+    /// also at least `initial` (or the join of the initial values after merging).
+    ///
+    /// Before anything is inserted every query returns `initial`. A key never inserted can
+    /// return more than `initial` because of collisions with other keys.
     #[inline]
     pub fn query(&self, key: &K) -> L {
         let mut values = self.indices(key).map(|index| &self.buckets[index]);
