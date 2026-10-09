@@ -19,17 +19,12 @@
 //!
 //! # Lattices
 //!
-//! Values are elements of a [`Lattice`]: a type with a partial order in which any two values have
-//! a least upper bound, called their _join_, and a greatest lower bound, called their _meet_.
-//! Integers form a lattice under their usual ordering, where the join of two numbers is simply the
-//! greater of the two and the meet is the lesser. Booleans form one too, with `false` below
-//! `true`: join is logical _or_ and meet is logical _and_. Seen this way, the better-known Bloom
-//! filter is a sketch of `bool`s into which only `true` is ever inserted.
+//! Values are elements of a [`Lattice`]: roughly, a type where any two values have a least upper
+//! bound and a greatest lower bound. All integer types and `bool` are lattices under their usual
+//! ordering. Seen this way, the Bloom filter is a sketch of `bool`s into which only `true` is ever
+//! inserted.
 //!
-//! In both cases join and meet pick one of the two values, but only because integers and booleans
-//! are _totally_ ordered. In a lattice in general, two values need not be comparable, and their
-//! join may be a third value above both — for sets ordered by inclusion, say, the join of two sets
-//! is their union, and the meet their intersection.
+//! For more information about lattices, see the [`Lattice`] trait.
 
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash};
 use std::marker::PhantomData;
@@ -47,13 +42,21 @@ pub use packed::PackedSketch;
 /// A type whose values form a lattice: any pair of values has a least upper bound and a greatest
 /// lower bound.
 ///
+/// The least upper bound of two values is called their _join_, and the greatest lower bound their
+/// _meet_. Integers form a lattice under their usual ordering, where the join of two numbers is
+/// the greater of the two and the meet is the lesser. Booleans form one too, with `false` below
+/// `true`: join is logical _or_ and meet is logical _and_.
+///
+/// In both cases join and meet pick one of the two values, but only because integers and booleans
+/// are _totally_ ordered. In a lattice in general, two values need not be comparable, and their
+/// join may be a third value above both — for sets ordered by inclusion, say, the join of two sets
+/// is their union, and the meet their intersection.
+///
 /// Implementations must make [`join`](Self::join) and [`meet`](Self::meet) commutative,
 /// associative and idempotent, and must make them agree with each other:
 /// `a.join(&a.meet(&b)) == a` and `a.meet(&a.join(&b)) == a` for all `a` and `b`. Sketches rely
 /// on these laws; an implementation that breaks them will cause a sketch to return incorrect
 /// answers.
-///
-/// Implemented for all integer types and for `bool` under their usual ordering.
 pub trait Lattice {
     /// The least upper bound of `self` and `other`.
     fn join(&self, other: &Self) -> Self;
