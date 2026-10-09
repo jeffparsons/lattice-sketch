@@ -1,15 +1,21 @@
 //! Sketches that approximate inserted values from above, generalising the Bloom filter.
 //!
-//! Inserting a value hashes its key to a small number of buckets and updates each of them to an
-//! upper bound of its old value and the inserted value. A query for a key returns an upper bound
-//! on every value ever inserted for that key — often the tightest such bound, but possibly a
-//! looser one, because other keys share buckets.
+//! A query for a key returns an upper bound on every value ever inserted for that key — often the
+//! tightest such bound, but possibly a looser one.
 //!
 //! Also called _compact approximators_ by Boldi and Vigna (2003).[^boldi-vigna]
 //!
 //! [^boldi-vigna]: Paolo Boldi and Sebastiano Vigna, "Compact Approximation of Lattice
 //!     Functions with Applications to Large-Alphabet Text Search", 2003.
 //!     <https://arxiv.org/abs/cs/0306046>
+//!
+//! # How it works
+//!
+//! Inserting a value hashes its key to a small number of buckets and updates each of them to an
+//! upper bound of its old value and the inserted value. A query for the key reads the same buckets
+//! and combines them into a bound that sits below all of them. Each bucket is already an upper
+//! bound on the key's values, so the combined bound is one too. It can be looser than the tightest
+//! bound because other keys share buckets.
 //!
 //! # Lattices
 //!
