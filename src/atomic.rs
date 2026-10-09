@@ -96,6 +96,32 @@ impl AtomicLattice for bool {
 ///
 /// Each bucket is a [`std::sync::atomic`] type. [`insert`](Self::insert) and [`merge`](Self::merge)
 /// take `&mut self` and use plain accesses to the destination buckets.
+///
+/// # Example
+///
+/// Record events from two threads, then query after both have finished:
+///
+/// ```
+/// # #[cfg(target_has_atomic = "64")]
+/// # {
+/// use lattice_sketch::AtomicSketch;
+/// use std::thread;
+///
+/// let latest_event = AtomicSketch::new(1024, 3, 0u64);
+/// thread::scope(|scope| {
+///     scope.spawn(|| latest_event.insert_shared(&"sensor-1", &1_700_000_060));
+///     scope.spawn(|| latest_event.insert_shared(&"sensor-2", &1_700_000_120));
+/// });
+///
+/// assert!(latest_event.query(&"sensor-1") >= 1_700_000_060);
+/// assert!(latest_event.query(&"sensor-2") >= 1_700_000_120);
+/// # }
+/// ```
+///
+/// The scope joins both threads before the queries, so both inserts are included.
+/// If your application can tolerate queries missing updates from other threads, you can query
+/// without explicit synchronisation. In that case, a result below a cutoff does not rule out
+/// an event inserted by another thread.
 pub struct AtomicSketch<K, L: AtomicLattice, S = BuildHasherDefault<DefaultHasher>> {
     buckets: Vec<L::Atomic>,
     buckets_per_key: usize,

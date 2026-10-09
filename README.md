@@ -25,12 +25,21 @@ latest_event.insert(&"sensor-1", &1_700_000_000); // An older event arrives late
 latest_event.insert(&"sensor-2", &1_700_000_120);
 assert!(latest_event.query(&"sensor-1") >= 1_700_000_060);
 assert!(latest_event.query(&"sensor-2") >= 1_700_000_120);
+
+let cutoff = 1_700_000_100;
+if latest_event.query(&"sensor-1") < cutoff {
+    println!("No event at or after the cutoff was recorded for sensor-1.");
+} else {
+    println!("sensor-1 may have an event at or after the cutoff.");
+}
 ```
 
-Inserting an older timestamp cannot lower the answer. Because different keys can share storage,
-the answer may be later than any event recorded for that device — even if the device has no
-recorded events. The initial value remains a lower bound on every answer. Choose an initial
-value that is a lower bound on all values you intend to insert.
+Inserting an older timestamp cannot lower the answer. A result below the cutoff rules out
+recorded events at or after it. A result at or above the cutoff is only a possible match:
+other keys can raise the answer, even for a device with no recorded events.
+
+The initial value remains a lower bound on every answer. Choose an initial value that is a
+lower bound on all values you intend to insert.
 
 The first constructor argument is the number of storage slots, or buckets; more buckets
 generally reduce collisions. The second is the number of bucket accesses per key. Increasing
