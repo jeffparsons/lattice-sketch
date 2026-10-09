@@ -85,6 +85,43 @@ impl AtomicLattice for bool {
     }
 }
 
+/// A sketch that can be updated by concurrent writers without locking.
+///
+/// [`insert_shared`](Self::insert_shared) and [`merge_shared`](Self::merge_shared) take `&self`
+/// and may be called from any number of threads at once. Queries need synchronisation to
+/// guarantee visibility of updates from other threads; see [`query`](Self::query).
+///
+/// The value type must be `bool` or an integer type with an atomic counterpart on the target,
+/// so `u128`, `i128` and the narrow integer types are excluded.
+///
+/// Each bucket is a [`std::sync::atomic`] type. [`insert`](Self::insert) and [`merge`](Self::merge)
+/// take `&mut self` and use plain accesses to the destination buckets.
+///
+/// # Example
+///
+/// Record events from two threads, then query after both have finished:
+///
+/// ```
+/// # #[cfg(target_has_atomic = "64")]
+/// # {
+/// use lattice_sketch::AtomicSketch;
+/// use std::thread;
+///
+/// let latest_event = AtomicSketch::new(1024, 3, 0u64);
+/// thread::scope(|scope| {
+///     scope.spawn(|| latest_event.insert_shared(&"sensor-1", &1_700_000_060));
+///     scope.spawn(|| latest_event.insert_shared(&"sensor-2", &1_700_000_120));
+/// });
+///
+/// assert!(latest_event.query(&"sensor-1") >= 1_700_000_060);
+/// assert!(latest_event.query(&"sensor-2") >= 1_700_000_120);
+/// # }
+/// ```
+///
+/// The scope joins both threads before the queries, so both inserts are included.
+/// If your application can tolerate queries missing updates from other threads, you can query
+/// without explicit synchronisation. In that case, a result below a cutoff does not rule out
+/// an event inserted by another thread.
 pub struct AtomicSketch<K, L: AtomicLattice, S = BuildHasherDefault<DefaultHasher>> {
     buckets: Vec<L::Atomic>,
     buckets_per_key: usize,
@@ -93,12 +130,32 @@ pub struct AtomicSketch<K, L: AtomicLattice, S = BuildHasherDefault<DefaultHashe
 }
 
 impl<K: Hash, L: AtomicLattice> AtomicSketch<K, L> {
+    /// Creates `bucket_count` buckets, each holding `initial`. Each insert and query makes
+    /// `buckets_per_key` bucket accesses.
+    ///
+    /// Every query on a newly created sketch returns `initial`. It remains a lower bound on
+    /// every answer afterwards. Choose a lower bound on all values you intend to insert: for
+    /// example, `false` for booleans or the minimum value for integers. Starting with `10` and
+    /// inserting `3` still gives an answer of at least `10`, even without collisions.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `bucket_count` or `buckets_per_key` is zero.
     pub fn new(bucket_count: usize, buckets_per_key: usize, initial: L) -> Self {
         Self::with_hasher(bucket_count, buckets_per_key, initial, Default::default())
     }
 }
 
 impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
+    /// Makes a new sketch like [`new`](Self::new), but hashing keys with `hash_builder` instead
+    /// of the default hasher.
+    ///
+    /// Two sketches can only be [merged](Self::merge) if they were built with equal hash
+    /// builders.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `bucket_count` or `buckets_per_key` is zero.
     pub fn with_hasher(
         bucket_count: usize,
         buckets_per_key: usize,
@@ -115,6 +172,12 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    /// Inserts `value` for `key`.
+    ///
+    /// Each of the key's buckets is raised to the [join](crate::Lattice::join) of its current value and
+    /// `value`, so subsequent queries for `key` return a value at least `value`. Requires
+    /// exclusive access; see [`insert_shared`](Self::insert_shared) to insert through a shared
+    /// reference.
     #[inline]
     pub fn insert(&mut self, key: &K, value: &L) {
         for index in self.indices(key) {
@@ -123,6 +186,20 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    /// Inserts `value` for `key` through a shared reference.
+    ///
+    /// Inserts completed before a query begins on the same thread are included. To include an
+    /// insert made on another thread, synchronise with that thread after the insert and before
+    /// the query, such as by receiving a channel message, acquiring a lock, or joining the thread.
+    /// This must establish a happens-before relationship from the insert's completion to the query.
+    ///
+    /// Bucket updates use atomic read-modify-write operations when needed, with no
+    /// synchronisation across buckets. A concurrent [`query`](Self::query) may therefore observe
+    /// some of an insert's bucket updates but not others. Buckets only move up, so a query for
+    /// `key` returns an upper bound on each value inserted for that key whose updates it
+    /// observed in full. An insert that is only partly visible may exceed the query's result.
+    ///
+    /// Bucket updates use [`Relaxed`](Ordering::Relaxed) ordering.
     #[inline]
     pub fn insert_shared(&self, key: &K, value: &L) {
         for index in self.indices(key) {
@@ -134,6 +211,23 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    /// Merges the bucket values observed in `other` into `self`.
+    ///
+    /// Each bucket becomes the [join](crate::Lattice::join) of its current value and the
+    /// corresponding bucket read from `other`. Exclusive access is required only to `self`;
+    /// `other` may be updated concurrently, so its buckets may reflect different stages of an
+    /// insert or merge. Reads from `other` use [`Relaxed`](Ordering::Relaxed) ordering.
+    ///
+    /// If all updates to `other` happen before this merge, the result is identical to having
+    /// made every insert from both sketches into one sketch, in any order, starting with the
+    /// join of their initial values. Synchronise with writers to `other` to guarantee this;
+    /// unsynchronised or concurrent updates may be missed or only partly included.
+    ///
+    /// See [`merge_shared`](Self::merge_shared) to merge through a shared reference.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the two sketches differ in bucket count, buckets per key, or hash builder.
     pub fn merge(&mut self, other: &Self)
     where
         S: PartialEq,
@@ -145,6 +239,16 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    /// Merges `other` into `self` through a shared reference.
+    ///
+    /// Equivalent to [`merge`](Self::merge), but each bucket is updated atomically, with the same
+    /// visibility guarantees as [`insert_shared`](Self::insert_shared). Both sketches may be
+    /// concurrently updated. Reads from `other` have the same visibility caveats as in
+    /// `merge`; the merge does not take a consistent snapshot of its buckets.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the two sketches differ in bucket count, buckets per key, or hash builder.
     pub fn merge_shared(&self, other: &Self)
     where
         S: PartialEq,
@@ -159,6 +263,21 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
         }
     }
 
+    /// Returns an upper bound on values inserted for `key` whose inserts happen before this
+    /// query. Inserts on the same thread are included; inserts on another thread require
+    /// synchronisation, such as a channel, a lock, or joining that thread.
+    ///
+    /// The bound is the [meet](crate::Lattice::meet) of the key's buckets. Collisions with other
+    /// keys and the choice of `initial` can make the bound looser. Every answer is at least
+    /// `initial`. A merge whose updates happen before this query raises that floor to the
+    /// join of the sketches' initial values.
+    ///
+    /// Every query on a newly created sketch returns `initial`. A key never inserted can
+    /// return more than `initial` because of collisions with other keys.
+    ///
+    /// Buckets are read with [`Relaxed`](Ordering::Relaxed) ordering. Concurrent inserts and
+    /// merges may be only partially visible; the result need not include unsynchronised
+    /// updates from another thread. See [`insert_shared`](Self::insert_shared) for details.
     #[inline]
     pub fn query(&self, key: &K) -> L {
         let mut values = self.indices(key).map(|index| L::load(&self.buckets[index]));

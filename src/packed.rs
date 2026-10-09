@@ -73,6 +73,20 @@ impl_packed_lattice_for_narrow_integers! {
     U56 => 7 bytes in u64;
 }
 
+/// A sketch that stores narrow value types more densely than [`Sketch`](crate::Sketch) does.
+///
+/// `Sketch<K, L>` stores each bucket as a whole `L`, so a `bool` bucket takes a byte and a
+/// [`U24`] bucket four. `PackedSketch` stores `bool` buckets at one bit each and [`U24`], [`U40`],
+/// [`U48`] and [`U56`] buckets at three, five, six and seven bytes. Those are the only value
+/// types it supports.
+///
+/// Boolean storage is rounded up to whole bytes. Narrow integer storage also has a total of
+/// one to three bytes of trailing padding.
+///
+/// Packing allows more buckets within a given memory budget, which typically reduces
+/// collisions and improves accuracy. Changing the bucket count changes the mapping, so a
+/// tighter answer is not guaranteed for every key. Packing and unpacking may add overhead
+/// compared with `Sketch`; the performance tradeoff depends on the workload.
 pub struct PackedSketch<K, L: PackedLattice, S = BuildHasherDefault<DefaultHasher>> {
     bytes: Vec<u8>,
     bucket_count: usize,
@@ -82,12 +96,32 @@ pub struct PackedSketch<K, L: PackedLattice, S = BuildHasherDefault<DefaultHashe
 }
 
 impl<K: Hash, L: PackedLattice> PackedSketch<K, L> {
+    /// Creates `bucket_count` buckets, each holding `initial`. Each insert and query makes
+    /// `buckets_per_key` bucket accesses.
+    ///
+    /// Every query on a newly created sketch returns `initial`. It remains a lower bound on
+    /// every answer afterwards. Choose a lower bound on all values you intend to insert: for
+    /// example, `false` for booleans or the minimum value for integers. Starting with `10` and
+    /// inserting `3` still gives an answer of at least `10`, even without collisions.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `bucket_count` or `buckets_per_key` is zero.
     pub fn new(bucket_count: usize, buckets_per_key: usize, initial: L) -> Self {
         Self::with_hasher(bucket_count, buckets_per_key, initial, Default::default())
     }
 }
 
 impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
+    /// Makes a new sketch like [`new`](Self::new), but hashing keys with `hash_builder` instead
+    /// of the default hasher.
+    ///
+    /// Two sketches can only be [merged](Self::merge) if they were built with equal hash
+    /// builders.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `bucket_count` or `buckets_per_key` is zero.
     pub fn with_hasher(
         bucket_count: usize,
         buckets_per_key: usize,
@@ -110,6 +144,10 @@ impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
         }
     }
 
+    /// Inserts `value` for `key`.
+    ///
+    /// Each of the key's buckets is raised to the [join](crate::Lattice::join) of its current
+    /// value and `value`, so subsequent queries for `key` return a value at least `value`.
     #[inline]
     pub fn insert(&mut self, key: &K, value: &L) {
         for index in self.indices(key) {
@@ -118,6 +156,16 @@ impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
         }
     }
 
+    /// Merges `other` into `self`, so that `self` afterwards answers every query with an upper
+    /// bound on every value inserted for that key into either sketch.
+    ///
+    /// Each bucket becomes the [join](crate::Lattice::join) of the two sketches' corresponding
+    /// buckets. The result is identical to having made every insert into one sketch, in any
+    /// order, starting with the join of the two sketches' initial values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the two sketches differ in bucket count, buckets per key, or hash builder.
     pub fn merge(&mut self, other: &Self)
     where
         S: PartialEq,
@@ -138,6 +186,15 @@ impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
         }
     }
 
+    /// Returns an upper bound on every value ever inserted for `key`.
+    ///
+    /// The bound is the [meet](crate::Lattice::meet) of the key's buckets. It can equal the
+    /// [join](crate::Lattice::join) of everything inserted for `key`, but can be looser when other
+    /// keys share buckets or `initial` is not below all the inserted values. Every answer is
+    /// also at least `initial` (or the join of the initial values after merging).
+    ///
+    /// Every query on a newly created sketch returns `initial`. A key never inserted can
+    /// return more than `initial` because of collisions with other keys.
     #[inline]
     pub fn query(&self, key: &K) -> L {
         let mut values = self.indices(key).map(|index| L::get(&self.bytes, index));

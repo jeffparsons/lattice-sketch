@@ -5,4 +5,47 @@
 [![Build status](https://github.com/jeffparsons/lattice-sketch/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jeffparsons/lattice-sketch/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/rust-1.99%2B-blue.svg)](https://github.com/jeffparsons/lattice-sketch)
 
-WIP
+Sketches that approximate inserted values from above, generalising the Bloom filter.
+
+A query for a key returns an upper bound on every value inserted for that key. The bound may
+be exact or an overestimate. With `AtomicSketch`, updates from other threads require
+synchronisation to guarantee their visibility.
+
+Track an upper bound on the latest event time recorded for each device:
+
+```rust
+use lattice_sketch::Sketch;
+
+// Event times are seconds since the Unix epoch, keyed by device ID.
+let mut latest_event = Sketch::new(1024, 3, 0u64);
+assert_eq!(latest_event.query(&"sensor-1"), 0);
+
+latest_event.insert(&"sensor-1", &1_700_000_060);
+latest_event.insert(&"sensor-1", &1_700_000_000); // An older event arrives later.
+latest_event.insert(&"sensor-2", &1_700_000_120);
+assert!(latest_event.query(&"sensor-1") >= 1_700_000_060);
+assert!(latest_event.query(&"sensor-2") >= 1_700_000_120);
+
+let cutoff = 1_700_000_100;
+if latest_event.query(&"sensor-1") < cutoff {
+    println!("No event at or after the cutoff was recorded for sensor-1.");
+} else {
+    println!("sensor-1 may have an event at or after the cutoff.");
+}
+```
+
+Inserting an older timestamp cannot lower the answer. A result below the cutoff rules out
+recorded events at or after it. A result at or above the cutoff is only a possible match:
+other keys can raise the answer, even for a device with no recorded events.
+
+The initial value remains a lower bound on every answer. Choose an initial value that is a
+lower bound on all values you intend to insert.
+
+The first constructor argument is the number of storage slots, or buckets; more buckets
+generally reduce collisions. The second is the number of bucket accesses per key. Increasing
+it costs more work and can improve queries, but also updates more buckets per insert. Tune
+both for your workload and memory budget.
+
+`Sketch` supports any lattice value type. `AtomicSketch` supports concurrent updates.
+`PackedSketch` stores booleans and narrow integers more densely. See the
+[crate documentation](https://docs.rs/lattice-sketch) for details.

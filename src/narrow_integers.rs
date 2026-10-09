@@ -2,6 +2,15 @@ use std::fmt;
 
 macro_rules! narrow_integers {
     ($($name:ident: $bits:literal bits in $repr:ty, from [$($narrower:ty),*]);* $(;)?) => {$(
+        #[doc = concat!(
+            "An unsigned ", $bits, "-bit integer, stored in a `", stringify!($repr), "`.\n\n",
+            "Exists so that [`PackedSketch`](crate::PackedSketch) can store a bucket in ", $bits,
+            " bits rather than a whole `", stringify!($repr), "`. Forms a ",
+            "[`Lattice`](crate::Lattice) under its usual ordering like the built-in integers. ",
+            "\n\nConvert from `", stringify!($repr), "` with `TryFrom`, which returns ",
+            "[`OutOfRangeError`] if the value is out of range. Convert back to `",
+            stringify!($repr), "` with `From`.",
+        )]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name($repr);
 
@@ -43,6 +52,7 @@ narrow_integers! {
     U56: 56 bits in u64, from [u8, u16, u32];
 }
 
+/// An error returned when a value is out of range for [`U24`], [`U40`], [`U48`] or [`U56`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutOfRangeError(());
 
