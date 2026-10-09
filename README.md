@@ -7,6 +7,10 @@
 
 Sketches that approximate inserted values from above, generalising the Bloom filter.
 
+A query for a key returns an upper bound on every value inserted for that key. The bound may
+be exact or an overestimate. With `AtomicSketch`, updates from other threads require
+synchronisation to guarantee their visibility.
+
 Track an upper bound on the latest event time recorded for each device:
 
 ```rust
@@ -23,18 +27,16 @@ assert!(latest_event.query(&"sensor-1") >= 1_700_000_060);
 assert!(latest_event.query(&"sensor-2") >= 1_700_000_120);
 ```
 
-Insertion joins values rather than replacing them: for integers, it retains their maximum,
-so the late arrival of an older event does not lower the answer. Collisions can make a device
-appear more recently active than its recorded events justify, even if it has no recorded
-events. The initial value remains a lower bound on every answer, so choose it below all values
-you intend to insert.
+Inserting an older timestamp cannot lower the answer. Because different keys can share storage,
+the answer may be later than any event recorded for that device — even if the device has no
+recorded events. The initial value remains a lower bound on every answer. Choose an initial
+value that is a lower bound on all values you intend to insert.
 
-The first constructor argument is the bucket count; more buckets generally reduce collisions.
-The second is the number of bucket accesses per key. Increasing it costs more work and can
-improve queries, but also updates more buckets per insert. Tune both for your workload and
-memory budget.
+The first constructor argument is the number of storage slots, or buckets; more buckets
+generally reduce collisions. The second is the number of bucket accesses per key. Increasing
+it costs more work and can improve queries, but also updates more buckets per insert. Tune
+both for your workload and memory budget.
 
-`Sketch` supports any lattice value type. `AtomicSketch` supports concurrent updates, with
-synchronisation needed to guarantee visibility of updates from other threads. `PackedSketch`
-stores booleans and narrow integers more densely. See the
+`Sketch` supports any lattice value type. `AtomicSketch` supports concurrent updates.
+`PackedSketch` stores booleans and narrow integers more densely. See the
 [crate documentation](https://docs.rs/lattice-sketch) for details.

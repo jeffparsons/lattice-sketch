@@ -87,12 +87,15 @@ impl AtomicLattice for bool {
 
 /// A sketch that can be updated by concurrent writers without locking.
 ///
-/// Each bucket is a [`std::sync::atomic`] type. [`insert_shared`](Self::insert_shared) and
-/// [`merge_shared`](Self::merge_shared) take `&self` and may be called from any number of threads
-/// at once; [`insert`](Self::insert) and [`merge`](Self::merge) take `&mut self` and do the same
-/// work with plain accesses to the destination buckets. `merge` still reads the source
-/// atomically. The value type must be `bool` or an integer type with an atomic counterpart on
-/// the target, so `u128`, `i128` and the narrow integer types are excluded.
+/// [`insert_shared`](Self::insert_shared) and [`merge_shared`](Self::merge_shared) take `&self`
+/// and may be called from any number of threads at once. Queries need synchronisation to
+/// guarantee visibility of updates from other threads; see [`query`](Self::query).
+///
+/// The value type must be `bool` or an integer type with an atomic counterpart on the target,
+/// so `u128`, `i128` and the narrow integer types are excluded.
+///
+/// Each bucket is a [`std::sync::atomic`] type. [`insert`](Self::insert) and [`merge`](Self::merge)
+/// take `&mut self` and use plain accesses to the destination buckets.
 pub struct AtomicSketch<K, L: AtomicLattice, S = BuildHasherDefault<DefaultHasher>> {
     buckets: Vec<L::Atomic>,
     buckets_per_key: usize,
@@ -101,13 +104,13 @@ pub struct AtomicSketch<K, L: AtomicLattice, S = BuildHasherDefault<DefaultHashe
 }
 
 impl<K: Hash, L: AtomicLattice> AtomicSketch<K, L> {
-    /// Makes a new sketch with `bucket_count` buckets, each holding `initial`, in which each key
-    /// maps to `buckets_per_key` of them.
+    /// Creates `bucket_count` buckets, each holding `initial`. Each insert and query makes
+    /// `buckets_per_key` bucket accesses.
     ///
-    /// `initial` is the answer every query returns until something is inserted, and remains a
-    /// lower bound on every answer afterwards. Choose a lower bound on all values you intend to
-    /// insert: for example, `false` for booleans or the minimum value for integers. Starting
-    /// with `10` and inserting `3` still gives an answer of at least `10`, even without collisions.
+    /// Every query on a newly created sketch returns `initial`. It remains a lower bound on
+    /// every answer afterwards. Choose a lower bound on all values you intend to insert: for
+    /// example, `false` for booleans or the minimum value for integers. Starting with `10` and
+    /// inserting `3` still gives an answer of at least `10`, even without collisions.
     ///
     /// # Panics
     ///
@@ -159,16 +162,18 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
 
     /// Inserts `value` for `key` through a shared reference.
     ///
+    /// Inserts completed before a query begins on the same thread are included. To include an
+    /// insert made on another thread, synchronise with that thread after the insert and before
+    /// the query, such as by receiving a channel message, acquiring a lock, or joining the thread.
+    /// This must establish a happens-before relationship from the insert's completion to the query.
+    ///
     /// Bucket updates use atomic read-modify-write operations when needed, with no
     /// synchronisation across buckets. A concurrent [`query`](Self::query) may therefore observe
     /// some of an insert's bucket updates but not others. Buckets only move up, so a query for
     /// `key` returns an upper bound on each value inserted for that key whose updates it
     /// observed in full. An insert that is only partly visible may exceed the query's result.
     ///
-    /// Bucket updates use [`Relaxed`](Ordering::Relaxed) ordering. Inserts completed before a
-    /// query begins on the same thread are included. To include an insert made on another
-    /// thread, establish a happens-before relationship from its completion to the query by
-    /// other means, such as a channel, a lock, or joining the thread.
+    /// Bucket updates use [`Relaxed`](Ordering::Relaxed) ordering.
     #[inline]
     pub fn insert_shared(&self, key: &K, value: &L) {
         for index in self.indices(key) {
@@ -236,13 +241,12 @@ impl<K: Hash, L: AtomicLattice, S: BuildHasher> AtomicSketch<K, L, S> {
     /// query. Inserts on the same thread are included; inserts on another thread require
     /// synchronisation, such as a channel, a lock, or joining that thread.
     ///
-    /// The bound is the [meet](crate::Lattice::meet) of the key's buckets. It can equal the
-    /// [join](crate::Lattice::join) of everything inserted for `key`, but can be looser when other
-    /// keys share buckets or `initial` is not below all the inserted values. Every answer is
-    /// also at least `initial`. A merge whose updates happen before this query raises that
-    /// floor to the join of the sketches' initial values.
+    /// The bound is the [meet](crate::Lattice::meet) of the key's buckets. Collisions with other
+    /// keys and the choice of `initial` can make the bound looser. Every answer is at least
+    /// `initial`. A merge whose updates happen before this query raises that floor to the
+    /// join of the sketches' initial values.
     ///
-    /// Before anything is inserted every query returns `initial`. A key never inserted can
+    /// Every query on a newly created sketch returns `initial`. A key never inserted can
     /// return more than `initial` because of collisions with other keys.
     ///
     /// Buckets are read with [`Relaxed`](Ordering::Relaxed) ordering. Concurrent inserts and

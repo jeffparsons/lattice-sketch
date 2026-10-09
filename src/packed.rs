@@ -78,8 +78,10 @@ impl_packed_lattice_for_narrow_integers! {
 /// `Sketch<K, L>` stores each bucket as a whole `L`, so a `bool` bucket takes a byte and a
 /// [`U24`] bucket four. `PackedSketch` stores `bool` buckets at one bit each and [`U24`], [`U40`],
 /// [`U48`] and [`U56`] buckets at three, five, six and seven bytes. Those are the only value
-/// types it supports. Boolean storage is rounded up to whole bytes. Narrow integer storage
-/// also has a total of one to three bytes of trailing padding.
+/// types it supports.
+///
+/// Boolean storage is rounded up to whole bytes. Narrow integer storage also has a total of
+/// one to three bytes of trailing padding.
 ///
 /// Packing allows more buckets within a given memory budget, which typically reduces
 /// collisions and improves accuracy. Changing the bucket count changes the mapping, so a
@@ -94,13 +96,13 @@ pub struct PackedSketch<K, L: PackedLattice, S = BuildHasherDefault<DefaultHashe
 }
 
 impl<K: Hash, L: PackedLattice> PackedSketch<K, L> {
-    /// Makes a new sketch with `bucket_count` buckets, each holding `initial`, in which each key
-    /// maps to `buckets_per_key` of them.
+    /// Creates `bucket_count` buckets, each holding `initial`. Each insert and query makes
+    /// `buckets_per_key` bucket accesses.
     ///
-    /// `initial` is the answer every query returns until something is inserted, and remains a
-    /// lower bound on every answer afterwards. Choose a lower bound on all values you intend to
-    /// insert: for example, `false` for booleans or the minimum value for integers. Starting
-    /// with `10` and inserting `3` still gives an answer of at least `10`, even without collisions.
+    /// Every query on a newly created sketch returns `initial`. It remains a lower bound on
+    /// every answer afterwards. Choose a lower bound on all values you intend to insert: for
+    /// example, `false` for booleans or the minimum value for integers. Starting with `10` and
+    /// inserting `3` still gives an answer of at least `10`, even without collisions.
     ///
     /// # Panics
     ///
@@ -191,7 +193,7 @@ impl<K: Hash, L: PackedLattice, S: BuildHasher> PackedSketch<K, L, S> {
     /// keys share buckets or `initial` is not below all the inserted values. Every answer is
     /// also at least `initial` (or the join of the initial values after merging).
     ///
-    /// Before anything is inserted every query returns `initial`. A key never inserted can
+    /// Every query on a newly created sketch returns `initial`. A key never inserted can
     /// return more than `initial` because of collisions with other keys.
     #[inline]
     pub fn query(&self, key: &K) -> L {

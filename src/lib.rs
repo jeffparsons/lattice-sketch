@@ -1,14 +1,8 @@
 //! Sketches that approximate inserted values from above, generalising the Bloom filter.
 //!
-//! A query for a key returns an upper bound on every value ever inserted for that key — often the
-//! tightest such bound, but possibly a looser one. With [`AtomicSketch`], this guarantee applies
-//! to inserts that happen before the query; updates on another thread require synchronisation.
-//!
-//! Also called _compact approximators_ by Boldi and Vigna (2003).[^boldi-vigna]
-//!
-//! [^boldi-vigna]: Paolo Boldi and Sebastiano Vigna, "Compact Approximation of Lattice
-//!     Functions with Applications to Large-Alphabet Text Search", 2003.
-//!     <https://arxiv.org/abs/cs/0306046>
+//! A query for a key returns an upper bound on every value ever inserted for that key. The bound
+//! may be exact or an overestimate. With [`AtomicSketch`], this guarantee applies to inserts that
+//! happen before the query; updates on another thread require synchronisation.
 //!
 //! # Example
 //!
@@ -28,11 +22,21 @@
 //! assert!(latest_event.query(&"sensor-2") >= 1_700_000_120);
 //! ```
 //!
-//! Insertion joins values rather than replacing them: for integers, it retains their maximum,
-//! so the late arrival of an older event does not lower the answer. Collisions can make a device
-//! appear more recently active than its recorded events justify, even if it has no recorded
-//! events. `initial` remains a lower bound on every answer, so choose it below all values you
-//! intend to insert.
+//! Inserting an older timestamp cannot lower the answer. Because different keys can share storage,
+//! the answer may be later than any event recorded for that device — even if the device has no
+//! recorded events. `initial` remains a lower bound on every answer. Choose an initial value
+//! that is a lower bound on all values you intend to insert.
+//!
+//! # How it works
+//!
+//! Each key hashes to one or more storage slots called buckets. For integers, insertion updates
+//! each bucket to the maximum of its current value and the inserted value. A query returns the
+//! minimum of those buckets. Every bucket used by a key is at least as large as every value
+//! inserted for that key, so their minimum is too.
+//!
+//! For other lattices, these operations are [join](Lattice::join), the least upper bound, and
+//! [meet](Lattice::meet), the greatest lower bound. The answer can be looser than the tightest
+//! bound because other keys share buckets or `initial` is not a lower bound on all inserted values.
 //!
 //! # Choosing parameters
 //!
@@ -43,22 +47,20 @@
 //! tighter answer for every key. Bucket indices can repeat, so `buckets_per_key` is not a
 //! guarantee of that many distinct buckets.
 //!
-//! # How it works
-//!
-//! Inserting a value hashes its key to a small number of buckets and updates each of them to an
-//! upper bound of its old value and the inserted value. A query takes the greatest lower bound
-//! of those buckets. Every value inserted for the key is a lower bound of all its buckets, so it
-//! lies below their greatest lower bound. The answer can be looser than the tightest bound because
-//! other keys share buckets or `initial` is not below all the inserted values.
-//!
 //! # Lattices
 //!
 //! Values are elements of a [`Lattice`]: roughly, a type where any two values have a least upper
 //! bound and a greatest lower bound. All integer types and `bool` are lattices under their usual
-//! ordering. Seen this way, the Bloom filter is a sketch of `bool`s into which only `true` is ever
-//! inserted.
+//! ordering. Seen this way, the Bloom filter is a sketch of `bool`s, initialised to `false`, into
+//! which only `true` is inserted.
 //!
 //! For more information about lattices, see the [`Lattice`] trait.
+//!
+//! These sketches are also called _compact approximators_ by Boldi and Vigna (2003).[^boldi-vigna]
+//!
+//! [^boldi-vigna]: Paolo Boldi and Sebastiano Vigna, "Compact Approximation of Lattice
+//!     Functions with Applications to Large-Alphabet Text Search", 2003.
+//!     <https://arxiv.org/abs/cs/0306046>
 
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash};
 use std::marker::PhantomData;
@@ -82,14 +84,14 @@ pub use packed::PackedSketch;
 /// `true`: join is logical _or_ and meet is logical _and_.
 ///
 /// In both cases join and meet pick one of the two values, but only because integers and booleans
-/// are _totally_ ordered. In a lattice in general, two values need not be comparable, and their
-/// join may be a third value above both — for sets ordered by inclusion, say, the join of two sets
-/// is their union, and the meet their intersection.
+/// are _totally_ ordered. In other lattices, two values need not be comparable. Their join may be
+/// a third value above both. For sets ordered by inclusion, join is union and meet is intersection.
 ///
 /// Implementations must make [`join`](Self::join) and [`meet`](Self::meet) commutative,
-/// associative and idempotent, and must make them agree with each other:
+/// associative and idempotent: changing the order or grouping must not change the result, and
+/// combining a value with itself must return that value. The two operations must also agree:
 /// `a.join(&a.meet(&b)) == a` and `a.meet(&a.join(&b)) == a` for all `a` and `b`. Sketches rely
-/// on these laws; an implementation that breaks them will cause a sketch to return incorrect
+/// on these laws; an implementation that breaks them can cause a sketch to return incorrect
 /// answers.
 pub trait Lattice {
     /// The least upper bound of `self` and `other`.
@@ -144,13 +146,13 @@ pub struct Sketch<K, L, S = BuildHasherDefault<DefaultHasher>> {
 }
 
 impl<K: Hash, L: Lattice + Clone> Sketch<K, L> {
-    /// Makes a new sketch with `bucket_count` buckets, each holding `initial`, in which each key
-    /// maps to `buckets_per_key` of them.
+    /// Creates `bucket_count` buckets, each holding `initial`. Each insert and query makes
+    /// `buckets_per_key` bucket accesses.
     ///
-    /// `initial` is the answer every query returns until something is inserted, and remains a
-    /// lower bound on every answer afterwards. Choose a lower bound on all values you intend to
-    /// insert: for example, `false` for booleans or the minimum value for integers. Starting
-    /// with `10` and inserting `3` still gives an answer of at least `10`, even without collisions.
+    /// Every query on a newly created sketch returns `initial`. It remains a lower bound on
+    /// every answer afterwards. Choose a lower bound on all values you intend to insert: for
+    /// example, `false` for booleans or the minimum value for integers. Starting with `10` and
+    /// inserting `3` still gives an answer of at least `10`, even without collisions.
     ///
     /// # Panics
     ///
@@ -231,7 +233,7 @@ impl<K: Hash, L: Lattice + Clone, S: BuildHasher> Sketch<K, L, S> {
     /// keys share buckets or `initial` is not below all the inserted values. Every answer is
     /// also at least `initial` (or the join of the initial values after merging).
     ///
-    /// Before anything is inserted every query returns `initial`. A key never inserted can
+    /// Every query on a newly created sketch returns `initial`. A key never inserted can
     /// return more than `initial` because of collisions with other keys.
     #[inline]
     pub fn query(&self, key: &K) -> L {
